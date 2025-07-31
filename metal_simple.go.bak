@@ -1,0 +1,164 @@
+//go:build darwin && cgo && !nometal
+// +build darwin,cgo,!nometal
+
+package main
+
+/*
+#cgo CFLAGS: -x objective-c
+#cgo LDFLAGS: -framework Metal -framework Foundation
+#import <Metal/Metal.h>
+#import <Foundation/Foundation.h>
+
+typedef struct {
+    id<MTLDevice> device;
+    id<MTLCommandQueue> commandQueue;
+    id<MTLComputePipelineState> pipelineState;
+} SimpleMetalCompute;
+
+SimpleMetalCompute* initSimpleMetal() {
+    @autoreleasepool {
+        id<MTLDevice> device = MTLCreateSystemDefaultDevice();
+        if (!device) return NULL;
+        
+        NSString *shaderSource = @"#include <metal_stdlib>\n"
+        "using namespace metal;\n"
+        "kernel void updateTectonics(device float* heights [[buffer(0)]],\n"
+        "                           constant float* velocities [[buffer(1)]],\n"
+        "                           constant int* plateIDs [[buffer(2)]],\n"
+        "                           constant int* plateTypes [[buffer(3)]],\n"
+        "                           uint index [[thread_position_in_grid]]) {\n"
+        "    if (index >= 10242) return;\n"
+        "    int plateID = plateIDs[index];\n"
+        "    if (plateID < 0 || plateID >= 32) return;\n"
+        "    float velocity = velocities[plateID];\n"
+        "    float uplift = velocity * 1000.0f * 0.00001f;\n"
+        "    if (plateTypes[plateID] == 0) {\n"
+        "        heights[index] += uplift;\n"
+        "    } else {\n"
+        "        heights[index] -= uplift * 0.5f;\n"
+        "    }\n"
+        "    heights[index] = clamp(heights[index], -0.02f, 0.02f);\n"
+        "}";
+        
+        NSError *error = nil;
+        id<MTLLibrary> library = [device newLibraryWithSource:shaderSource options:nil error:&error];
+        if (!library) return NULL;
+        
+        id<MTLFunction> function = [library newFunctionWithName:@"updateTectonics"];
+        if (!function) return NULL;
+        
+        id<MTLComputePipelineState> pipelineState = [device newComputePipelineStateWithFunction:function error:&error];
+        if (!pipelineState) return NULL;
+        
+        id<MTLCommandQueue> commandQueue = [device newCommandQueue];
+        if (!commandQueue) return NULL;
+        
+        SimpleMetalCompute* compute = malloc(sizeof(SimpleMetalCompute));
+        compute->device = (__bridge void*)device;
+        compute->commandQueue = (__bridge void*)commandQueue;
+        compute->pipelineState = (__bridge void*)pipelineState;
+        
+        return compute;
+    }
+}
+
+int runSimpleMetalCompute(SimpleMetalCompute* compute, float* heights, float* velocities, int* plateIDs, int* plateTypes, int numVertices) {
+    if (!compute) return 0;
+    
+    @autoreleasepool {
+        id<MTLDevice> device = (__bridge id<MTLDevice>)compute->device;
+        id<MTLCommandQueue> commandQueue = (__bridge id<MTLCommandQueue>)compute->commandQueue;
+        id<MTLComputePipelineState> pipelineState = (__bridge id<MTLComputePipelineState>)compute->pipelineState;
+        
+        id<MTLBuffer> heightBuffer = [device newBufferWithBytes:heights length:numVertices*sizeof(float) options:MTLResourceStorageModeShared];
+        id<MTLBuffer> velocityBuffer = [device newBufferWithBytes:velocities length:32*sizeof(float) options:MTLResourceStorageModeShared];
+        id<MTLBuffer> plateIDBuffer = [device newBufferWithBytes:plateIDs length:numVertices*sizeof(int) options:MTLResourceStorageModeShared];
+        id<MTLBuffer> plateTypeBuffer = [device newBufferWithBytes:plateTypes length:32*sizeof(int) options:MTLResourceStorageModeShared];
+        
+        id<MTLCommandBuffer> commandBuffer = [commandQueue commandBuffer];
+        id<MTLComputeCommandEncoder> encoder = [commandBuffer computeCommandEncoder];
+        
+        [encoder setComputePipelineState:pipelineState];
+        [encoder setBuffer:heightBuffer offset:0 atIndex:0];
+        [encoder setBuffer:velocityBuffer offset:0 atIndex:1];
+        [encoder setBuffer:plateIDBuffer offset:0 atIndex:2];
+        [encoder setBuffer:plateTypeBuffer offset:0 atIndex:3];
+        
+        MTLSize threadsPerGroup = MTLSizeMake(256, 1, 1);
+        MTLSize numThreadgroups = MTLSizeMake((numVertices + 255) / 256, 1, 1);
+        
+        [encoder dispatchThreadgroups:numThreadgroups threadsPerThreadgroup:threadsPerGroup];
+        [encoder endEncoding];
+        
+        [commandBuffer commit];
+        [commandBuffer waitUntilCompleted];
+        
+        memcpy(heights, [heightBuffer contents], numVertices * sizeof(float));
+        
+        return 1;
+    }
+}
+*/
+import "C"
+import (
+	"fmt"
+	"unsafe"
+)
+
+var simpleMetalGPU *C.SimpleMetalCompute
+
+func updateTectonicsSimpleMetal(planet Planet, deltaYears float64) Planet {
+	if simpleMetalGPU == nil || len(planet.Vertices) == 0 || len(planet.Plates) == 0 {
+		return updateTectonics(planet, deltaYears)
+	}
+	
+	// Convert to simple arrays
+	heights := make([]float32, len(planet.Vertices))
+	plateIDs := make([]int32, len(planet.Vertices))
+	for i, v := range planet.Vertices {
+		heights[i] = float32(v.Height)
+		plateIDs[i] = int32(v.PlateID)
+	}
+	
+	velocities := make([]float32, 32)
+	plateTypes := make([]int32, 32)
+	for i, p := range planet.Plates {
+		if i >= 32 { break }
+		velocities[i] = float32(p.Velocity.Length())
+		if p.Type == Continental {
+			plateTypes[i] = 0
+		} else {
+			plateTypes[i] = 1
+		}
+	}
+	
+	success := C.runSimpleMetalCompute(
+		simpleMetalGPU,
+		(*C.float)(unsafe.Pointer(&heights[0])),
+		(*C.float)(unsafe.Pointer(&velocities[0])),
+		(*C.int)(unsafe.Pointer(&plateIDs[0])),
+		(*C.int)(unsafe.Pointer(&plateTypes[0])),
+		C.int(len(planet.Vertices)),
+	)
+	
+	if success == 0 {
+		fmt.Println("Simple Metal compute failed, falling back to CPU")
+		return updateTectonics(planet, deltaYears)
+	}
+	
+	// Copy results back
+	for i := range planet.Vertices {
+		planet.Vertices[i].Height = float64(heights[i])
+		planet.Vertices[i].Position = planet.Vertices[i].Position.Normalize()
+	}
+	
+	planet.GeologicalTime += deltaYears
+	return planet
+}
+
+func init() {
+	simpleMetalGPU = C.initSimpleMetal()
+	if simpleMetalGPU != nil {
+		fmt.Println("Simple Metal GPU initialized successfully")
+	}
+}

@@ -1,0 +1,366 @@
+//go:build darwin && cgo && !nometal
+// +build darwin,cgo,!nometal
+
+package main
+
+/*
+#cgo CFLAGS: -x objective-c -fobjc-arc
+#cgo LDFLAGS: -framework Metal -framework Foundation -framework CoreGraphics
+#import <Metal/Metal.h>
+#import <Foundation/Foundation.h>
+
+typedef struct {
+    void* device;
+    void* commandQueue;
+    void* library;
+    void* upliftPipeline;
+    void* erosionPipeline;
+} SimpleMetalContext;
+
+SimpleMetalContext* createSimpleMetalContext() {
+    @autoreleasepool {
+        id<MTLDevice> device = MTLCreateSystemDefaultDevice();
+        if (!device) {
+            return NULL;
+        }
+
+        id<MTLCommandQueue> queue = [device newCommandQueue];
+        if (!queue) {
+            return NULL;
+        }
+
+        // Simple shader for parallel height updates
+        NSString *shaderSource = @"#include <metal_stdlib>\n"
+            "using namespace metal;\n"
+            "\n"
+            "kernel void updateHeights(device float* heights [[buffer(0)]],\n"
+            "                         device float* deltas [[buffer(1)]],\n"
+            "                         constant uint& count [[buffer(2)]],\n"
+            "                         uint index [[thread_position_in_grid]]) {\n"
+            "    if (index >= count) return;\n"
+            "    heights[index] += deltas[index];\n"
+            "    heights[index] = clamp(heights[index], -0.04f, 0.08f);\n"
+            "}\n"
+            "\n"
+            "kernel void applyErosion(device float* heights [[buffer(0)]],\n"
+            "                        constant float& scale [[buffer(1)]],\n"
+            "                        constant uint& count [[buffer(2)]],\n"
+            "                        uint index [[thread_position_in_grid]]) {\n"
+            "    if (index >= count) return;\n"
+            "    float h = heights[index];\n"
+            "    if (h > 0.0f) {\n"
+            "        float erosion = 0.00001f * scale;\n"
+            "        if (h > 0.02f) erosion *= 3.0f;\n"
+            "        else if (h > 0.01f) erosion *= 2.0f;\n"
+            "        heights[index] = max(h - erosion, -0.001f);\n"
+            "    }\n"
+            "}\n";
+
+        NSError *error = nil;
+        id<MTLLibrary> library = [device newLibraryWithSource:shaderSource options:nil error:&error];
+        if (!library) {
+            NSLog(@"Failed to create Metal library: %@", error);
+            return NULL;
+        }
+
+        id<MTLFunction> upliftFunction = [library newFunctionWithName:@"updateHeights"];
+        id<MTLFunction> erosionFunction = [library newFunctionWithName:@"applyErosion"];
+
+        if (!upliftFunction || !erosionFunction) {
+            return NULL;
+        }
+
+        id<MTLComputePipelineState> upliftPipeline = [device newComputePipelineStateWithFunction:upliftFunction error:&error];
+        id<MTLComputePipelineState> erosionPipeline = [device newComputePipelineStateWithFunction:erosionFunction error:&error];
+
+        if (!upliftPipeline || !erosionPipeline) {
+            NSLog(@"Failed to create compute pipeline: %@", error);
+            return NULL;
+        }
+
+        SimpleMetalContext* ctx = (SimpleMetalContext*)malloc(sizeof(SimpleMetalContext));
+        ctx->device = (__bridge_retained void*)device;
+        ctx->commandQueue = (__bridge_retained void*)queue;
+        ctx->library = (__bridge_retained void*)library;
+        ctx->upliftPipeline = (__bridge_retained void*)upliftPipeline;
+        ctx->erosionPipeline = (__bridge_retained void*)erosionPipeline;
+
+        return ctx;
+    }
+}
+
+void destroySimpleMetalContext(SimpleMetalContext* ctx) {
+    if (!ctx) return;
+    @autoreleasepool {
+        if (ctx->device) CFRelease(ctx->device);
+        if (ctx->commandQueue) CFRelease(ctx->commandQueue);
+        if (ctx->library) CFRelease(ctx->library);
+        if (ctx->upliftPipeline) CFRelease(ctx->upliftPipeline);
+        if (ctx->erosionPipeline) CFRelease(ctx->erosionPipeline);
+        free(ctx);
+    }
+}
+
+int runMetalHeightUpdate(SimpleMetalContext* ctx, float* heights, float* deltas, int count) {
+    @autoreleasepool {
+        id<MTLDevice> device = (__bridge id<MTLDevice>)ctx->device;
+        id<MTLCommandQueue> queue = (__bridge id<MTLCommandQueue>)ctx->commandQueue;
+        id<MTLComputePipelineState> pipeline = (__bridge id<MTLComputePipelineState>)ctx->upliftPipeline;
+
+        // Create buffers
+        id<MTLBuffer> heightBuffer = [device newBufferWithBytes:heights
+                                                          length:count * sizeof(float)
+                                                         options:MTLResourceStorageModeShared];
+        id<MTLBuffer> deltaBuffer = [device newBufferWithBytes:deltas
+                                                         length:count * sizeof(float)
+                                                        options:MTLResourceStorageModeShared];
+        uint countVal = count;
+
+        // Create command buffer and encoder
+        id<MTLCommandBuffer> commandBuffer = [queue commandBuffer];
+        id<MTLComputeCommandEncoder> encoder = [commandBuffer computeCommandEncoder];
+
+        [encoder setComputePipelineState:pipeline];
+        [encoder setBuffer:heightBuffer offset:0 atIndex:0];
+        [encoder setBuffer:deltaBuffer offset:0 atIndex:1];
+        [encoder setBytes:&countVal length:sizeof(uint) atIndex:2];
+
+        // Calculate thread groups
+        NSUInteger threadGroupSize = pipeline.maxTotalThreadsPerThreadgroup;
+        if (threadGroupSize > count) threadGroupSize = count;
+
+        MTLSize threadsPerThreadgroup = MTLSizeMake(threadGroupSize, 1, 1);
+        MTLSize numThreadgroups = MTLSizeMake((count + threadGroupSize - 1) / threadGroupSize, 1, 1);
+
+        [encoder dispatchThreadgroups:numThreadgroups threadsPerThreadgroup:threadsPerThreadgroup];
+        [encoder endEncoding];
+
+        [commandBuffer commit];
+        [commandBuffer waitUntilCompleted];
+
+        // Copy results back
+        float* result = (float*)[heightBuffer contents];
+        memcpy(heights, result, count * sizeof(float));
+
+        return 0;
+    }
+}
+
+int runMetalErosion(SimpleMetalContext* ctx, float* heights, float scale, int count) {
+    @autoreleasepool {
+        id<MTLDevice> device = (__bridge id<MTLDevice>)ctx->device;
+        id<MTLCommandQueue> queue = (__bridge id<MTLCommandQueue>)ctx->commandQueue;
+        id<MTLComputePipelineState> pipeline = (__bridge id<MTLComputePipelineState>)ctx->erosionPipeline;
+
+        // Create buffer
+        id<MTLBuffer> heightBuffer = [device newBufferWithBytes:heights
+                                                          length:count * sizeof(float)
+                                                         options:MTLResourceStorageModeShared];
+        uint countVal = count;
+
+        // Create command buffer and encoder
+        id<MTLCommandBuffer> commandBuffer = [queue commandBuffer];
+        id<MTLComputeCommandEncoder> encoder = [commandBuffer computeCommandEncoder];
+
+        [encoder setComputePipelineState:pipeline];
+        [encoder setBuffer:heightBuffer offset:0 atIndex:0];
+        [encoder setBytes:&scale length:sizeof(float) atIndex:1];
+        [encoder setBytes:&countVal length:sizeof(uint) atIndex:2];
+
+        // Calculate thread groups
+        NSUInteger threadGroupSize = pipeline.maxTotalThreadsPerThreadgroup;
+        if (threadGroupSize > count) threadGroupSize = count;
+
+        MTLSize threadsPerThreadgroup = MTLSizeMake(threadGroupSize, 1, 1);
+        MTLSize numThreadgroups = MTLSizeMake((count + threadGroupSize - 1) / threadGroupSize, 1, 1);
+
+        [encoder dispatchThreadgroups:numThreadgroups threadsPerThreadgroup:threadsPerThreadgroup];
+        [encoder endEncoding];
+
+        [commandBuffer commit];
+        [commandBuffer waitUntilCompleted];
+
+        // Copy results back
+        float* result = (float*)[heightBuffer contents];
+        memcpy(heights, result, count * sizeof(float));
+
+        return 0;
+    }
+}
+*/
+import "C"
+import (
+	"fmt"
+	"unsafe"
+)
+
+type SimpleMetalGPU struct {
+	context *C.SimpleMetalContext
+	enabled bool
+}
+
+var simpleMetalGPU *SimpleMetalGPU
+
+func initSimpleMetalGPU() *SimpleMetalGPU {
+	ctx := C.createSimpleMetalContext()
+	if ctx == nil {
+		fmt.Println("Metal initialization failed - using CPU fallback")
+		return &SimpleMetalGPU{enabled: false}
+	}
+
+	fmt.Println("Metal acceleration initialized successfully!")
+	return &SimpleMetalGPU{
+		context: ctx,
+		enabled: true,
+	}
+}
+
+func (gpu *SimpleMetalGPU) UpdateTectonics(planet Planet, deltaYears float64) Planet {
+	if !gpu.enabled {
+		return updateTectonics(planet, deltaYears)
+	}
+
+	// Use the version without erosion to avoid double erosion
+	planet = updateTectonicsWithoutErosion(planet, deltaYears)
+
+	// Now apply GPU-accelerated erosion
+	if deltaYears >= 1000 {
+		//fmt.Printf("GPU: Running erosion for deltaYears=%.0f\n", deltaYears)
+		gpu.accelerateErosion(&planet, deltaYears)
+
+		// For very large time steps, also do bulk height updates on GPU
+		if deltaYears > 100000 {
+			fmt.Printf("GPU: Running tectonic acceleration for deltaYears=%.0f\n", deltaYears)
+			planet = gpu.accelerateTectonics(planet, deltaYears)
+		}
+
+		// Apply sedimentation and isostatic adjustment for smaller time steps
+		if deltaYears < 1000000 {
+			planet = applySedimentation(planet, deltaYears)
+			planet = applyIsostasticAdjustment(planet, deltaYears)
+		}
+	}
+
+	return planet
+}
+
+func (gpu *SimpleMetalGPU) accelerateTectonics(planet Planet, deltaYears float64) Planet {
+	// Simple GPU-accelerated tectonic uplift/subsidence
+	// This is a simplified version - just applies general height changes
+
+	count := len(planet.Vertices)
+	if count == 0 {
+		return planet
+	}
+
+	// Calculate height deltas based on plate boundaries
+	heights := make([]float32, count)
+	deltas := make([]float32, count)
+
+	for i, v := range planet.Vertices {
+		heights[i] = float32(v.Height)
+
+		// Simple tectonic model for GPU
+		// In reality, this would be more complex
+		if v.PlateID >= 0 && v.PlateID < len(planet.Plates) {
+			plate := planet.Plates[v.PlateID]
+			if plate.Type == Continental {
+				// Continental crust slowly rises
+				deltas[i] = float32(0.000001 * deltaYears / 1000000.0)
+			} else {
+				// Oceanic crust slowly sinks
+				deltas[i] = float32(-0.0000005 * deltaYears / 1000000.0)
+			}
+		}
+	}
+
+	// Apply height changes on GPU
+	C.runMetalHeightUpdate(
+		gpu.context,
+		(*C.float)(unsafe.Pointer(&heights[0])),
+		(*C.float)(unsafe.Pointer(&deltas[0])),
+		C.int(count),
+	)
+
+	// Copy back
+	for i := range planet.Vertices {
+		planet.Vertices[i].Height = float64(heights[i])
+		// Position stays on unit sphere - height is separate
+	}
+
+	return planet
+}
+
+func (gpu *SimpleMetalGPU) accelerateErosion(planet *Planet, deltaYears float64) {
+	count := len(planet.Vertices)
+	if count == 0 {
+		return
+	}
+
+	// Extract heights
+	heights := make([]float32, count)
+	for i, v := range planet.Vertices {
+		heights[i] = float32(v.Height)
+	}
+
+	// Run erosion on GPU
+	scale := float32(deltaYears / 1000000.0)
+	C.runMetalErosion(
+		gpu.context,
+		(*C.float)(unsafe.Pointer(&heights[0])),
+		C.float(scale),
+		C.int(count),
+	)
+
+	// Copy back
+	for i := range planet.Vertices {
+		planet.Vertices[i].Height = float64(heights[i])
+		// Position stays on unit sphere - height is separate
+	}
+}
+
+func updateTectonicsSimpleMetal(planet Planet, deltaYears float64) Planet {
+	if simpleMetalGPU == nil {
+		simpleMetalGPU = initSimpleMetalGPU()
+	}
+
+	if simpleMetalGPU.enabled {
+		return simpleMetalGPU.UpdateTectonics(planet, deltaYears)
+	}
+
+	return updateTectonics(planet, deltaYears)
+}
+
+// UpdateTectonicsWithoutErosion is used by Metal backend to avoid double erosion
+func updateTectonicsWithoutErosion(planet Planet, deltaYears float64) Planet {
+	planet.GeologicalTime += deltaYears
+
+	// Move plates as rigid bodies
+	planet = movePlates(planet, deltaYears)
+
+	// Only update boundaries periodically or when plates have moved significantly
+	if len(planet.Boundaries) == 0 || deltaYears > 100000 || int(planet.GeologicalTime)%1000000 == 0 {
+		planet.Boundaries = findPlateBoundaries(planet)
+	}
+
+	// Apply tectonic processes at boundaries
+	planet = applyTectonicProcesses(planet, deltaYears)
+
+	// Apply volcanic activity (less frequent for large time steps)
+	if deltaYears < 1000000 {
+		planet = applyVolcanism(planet, deltaYears)
+	} else {
+		// For very large time steps, apply volcanism less frequently
+		if int(planet.GeologicalTime)%5000000 == 0 {
+			planet = applyVolcanism(planet, 5000000)
+		}
+	}
+
+	// Erosion is handled separately by Metal backend
+
+	return planet
+}
+
+func init() {
+	simpleMetalGPU = initSimpleMetalGPU()
+}

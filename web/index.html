@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Project Terra - Phase 5</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background: #000;
+            font-family: Arial, sans-serif;
+            overflow: hidden;
+        }
+        #container {
+            width: 100vw;
+            height: 100vh;
+        }
+        #ui {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            color: white;
+            z-index: 100;
+            background: rgba(0,0,0,0.7);
+            padding: 10px;
+            border-radius: 5px;
+        }
+        .controls {
+            margin-top: 10px;
+        }
+        button {
+            margin: 2px;
+            padding: 5px 10px;
+            background: #333;
+            color: white;
+            border: none;
+            border-radius: 3px;
+            cursor: pointer;
+        }
+        button:hover {
+            background: #555;
+        }
+        button.active {
+            background: #007acc;
+        }
+    </style>
+</head>
+<body>
+    <div id="container"></div>
+    <div id="ui">
+        <h3>Project Terra - Phase 5: Real Plate Tectonics</h3>
+        <div>Geological Time: <span id="time">--</span></div>
+        <div>Speed: <span id="speed">--</span></div>
+        <div>Connection: <span id="connection">Disconnected</span></div>
+        <div class="controls">
+            <div>Speed Controls:</div>
+            <button onclick="setSpeed(1)">1yr/s</button>
+            <button onclick="setSpeed(10)">10yr/s</button>
+            <button onclick="setSpeed(100)">100yr/s</button>
+            <button onclick="setSpeed(1000)">1Kyr/s</button>
+            <button onclick="setSpeed(10000)">10Kyr/s</button>
+            <button onclick="setSpeed(100000)">100Kyr/s</button>
+            <button onclick="setSpeed(1000000)">1Myr/s</button>
+            <button onclick="setSpeed(10000000)">10Myr/s</button>
+            <button onclick="setSpeed(100000000)">100Myr/s</button>
+        </div>
+        <div class="controls">
+            <button id="waterBtn" onclick="toggleWater()">Water: ON</button>
+            <button onclick="toggleHeightmap()">Heightmap Mode</button>
+            <button onclick="togglePlateView()">Show Plates</button>
+            <button onclick="toggleBoundaries()">Show Boundaries</button>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="static/terra.js"></script>
+</body>
+</html>
