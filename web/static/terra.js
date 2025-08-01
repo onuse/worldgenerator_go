@@ -8,6 +8,7 @@ class TerraRenderer {
         this.boundaryMesh = null;
         this.showWater = true;
         this.heightmapMode = false;
+        this.currentSpeed = 0;
         
         this.init();
         this.connectWebSocket();
@@ -31,23 +32,23 @@ class TerraRenderer {
         const ambientLight = new THREE.AmbientLight(0x404040, 0.2); // Lower ambient
         this.scene.add(ambientLight);
 
-        // Primary directional light
-        const directionalLight = new THREE.DirectionalLight(0xffffff, 1.0);
-        directionalLight.position.set(2, 2, 1);
-        directionalLight.castShadow = true;
-        directionalLight.shadow.mapSize.width = 2048;
-        directionalLight.shadow.mapSize.height = 2048;
-        this.scene.add(directionalLight);
+        // Primary directional light (will follow camera)
+        this.directionalLight = new THREE.DirectionalLight(0xffffff, 1.0);
+        this.directionalLight.position.set(2, 2, 1);
+        this.directionalLight.castShadow = true;
+        this.directionalLight.shadow.mapSize.width = 2048;
+        this.directionalLight.shadow.mapSize.height = 2048;
+        this.scene.add(this.directionalLight);
         
-        // Secondary light for fill
-        const fillLight = new THREE.DirectionalLight(0x8888ff, 0.3);
-        fillLight.position.set(-1, -1, -0.5);
-        this.scene.add(fillLight);
+        // Secondary light for fill (will follow camera)
+        this.fillLight = new THREE.DirectionalLight(0x8888ff, 0.3);
+        this.fillLight.position.set(-1, -1, -0.5);
+        this.scene.add(this.fillLight);
         
-        // Rim light for edge definition
-        const rimLight = new THREE.DirectionalLight(0xffffaa, 0.4);
-        rimLight.position.set(0, 0, -2);
-        this.scene.add(rimLight);
+        // Rim light for edge definition (will follow camera)
+        this.rimLight = new THREE.DirectionalLight(0xffffaa, 0.4);
+        this.rimLight.position.set(0, 0, -2);
+        this.scene.add(this.rimLight);
 
         // Handle window resize
         window.addEventListener('resize', () => this.onWindowResize());
@@ -306,14 +307,66 @@ class TerraRenderer {
 
     updateUI(data) {
         const timeInMy = (data.time / 1000000).toFixed(1);
-        const speedText = data.timeSpeed.toFixed(0);
-        console.log('Updating UI - Time:', timeInMy, 'My, Speed:', speedText, 'years/sec');
+        
+        // Format speed display nicely
+        let speedText;
+        const speed = data.timeSpeed;
+        if (speed >= 1000000) {
+            speedText = (speed / 1000000).toFixed(0) + ' Myr/s';
+        } else if (speed >= 1000) {
+            speedText = (speed / 1000).toFixed(0) + ' Kyr/s';
+        } else {
+            speedText = speed.toFixed(0) + ' yr/s';
+        }
+        
+        console.log('Updating UI - Time:', timeInMy, 'My, Speed:', speedText);
         document.getElementById('time').textContent = timeInMy + ' My';
-        document.getElementById('speed').textContent = speedText + ' years/sec';
+        document.getElementById('speed').textContent = speedText;
+        
+        // Update button highlighting if speed changed
+        if (this.currentSpeed !== speed) {
+            this.currentSpeed = speed;
+            this.highlightActiveSpeedButton(speed);
+        }
+    }
+    
+    highlightActiveSpeedButton(speed) {
+        // Remove active class from all buttons
+        const buttons = document.querySelectorAll('.controls button[onclick^="setSpeed"]');
+        buttons.forEach(btn => btn.classList.remove('active'));
+        
+        // Add active class to the matching button
+        buttons.forEach(btn => {
+            const onclick = btn.getAttribute('onclick');
+            const match = onclick.match(/setSpeed\((\d+)\)/);
+            if (match && parseInt(match[1]) === speed) {
+                btn.classList.add('active');
+            }
+        });
     }
 
     animate() {
         requestAnimationFrame(() => this.animate());
+        
+        // Update light positions relative to camera
+        // This keeps the planet illuminated from the viewer's perspective
+        const cameraDir = new THREE.Vector3();
+        this.camera.getWorldDirection(cameraDir);
+        
+        // Main light slightly above and to the right of camera
+        const lightOffset1 = new THREE.Vector3(0.5, 0.5, 0).applyQuaternion(this.camera.quaternion);
+        this.directionalLight.position.copy(this.camera.position).add(lightOffset1);
+        this.directionalLight.target.position.set(0, 0, 0);
+        
+        // Fill light to the left and below
+        const lightOffset2 = new THREE.Vector3(-0.3, -0.3, 0).applyQuaternion(this.camera.quaternion);
+        this.fillLight.position.copy(this.camera.position).add(lightOffset2);
+        this.fillLight.target.position.set(0, 0, 0);
+        
+        // Rim light behind the planet from camera's perspective
+        this.rimLight.position.copy(cameraDir).multiplyScalar(-3);
+        this.rimLight.target.position.set(0, 0, 0);
+        
         this.renderer.render(this.scene, this.camera);
     }
 

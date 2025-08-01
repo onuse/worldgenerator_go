@@ -4,19 +4,24 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"time"
 )
 
 func generateTectonicPlates(planet Planet, numPlates int) Planet {
 	// First, generate realistic terrain using fractal noise
 	fmt.Println("Generating fractal terrain...")
+	startTerrain := time.Now()
 	planet = generateRealisticContinents(planet)
+	fmt.Printf("  Terrain generation completed in %.2fs\n", time.Since(startTerrain).Seconds())
 	
 	// Then create plates organically based on the terrain
 	fmt.Println("Creating organic plates from terrain...")
 	planet = createOrganicPlates(planet, numPlates)
 	
 	// Find and classify plate boundaries
+	startTime := time.Now()
 	planet.Boundaries = findPlateBoundaries(planet)
+	fmt.Printf("  Boundary detection completed in %.2f seconds\n", time.Since(startTime).Seconds())
 	
 	// Debug output
 	minH, maxH := planet.Vertices[0].Height, planet.Vertices[0].Height
@@ -70,8 +75,33 @@ func findPlateBoundaries(planet Planet) []PlateBoundary {
 	var boundaries []PlateBoundary
 	boundaryMap := make(map[[2]int][]int) // [plate1, plate2] -> vertex indices
 	
+	totalTriangles := len(planet.Indices) / 3
+	fmt.Printf("Finding plate boundaries (%d triangles)...\n", totalTriangles)
+	
 	// Find edges between different plates
+	progressInterval := totalTriangles / 20 // Report every 5%
+	if progressInterval == 0 {
+		progressInterval = 1
+	}
+	
 	for i := 0; i < len(planet.Indices); i += 3 {
+		// Progress reporting
+		if (i/3)%progressInterval == 0 {
+			progress := float64(i) / float64(len(planet.Indices)) * 100
+			fmt.Printf("\r  Checking triangles: %3.0f%% [", progress)
+			
+			// Draw progress bar
+			barWidth := 40
+			filled := int(progress * float64(barWidth) / 100)
+			for j := 0; j < barWidth; j++ {
+				if j < filled {
+					fmt.Print("=")
+				} else {
+					fmt.Print(" ")
+				}
+			}
+			fmt.Printf("] %d/%d", i/3, totalTriangles)
+		}
 		v1 := int(planet.Indices[i])
 		v2 := int(planet.Indices[i+1])
 		v3 := int(planet.Indices[i+2])
@@ -99,7 +129,15 @@ func findPlateBoundaries(planet Planet) []PlateBoundary {
 		}
 	}
 	
+	// Complete the progress bar
+	fmt.Printf("\r  Checking triangles: 100%% [")
+	for j := 0; j < 40; j++ {
+		fmt.Print("=")
+	}
+	fmt.Printf("] %d/%d\n", totalTriangles, totalTriangles)
+	
 	// Convert map to boundary structs
+	fmt.Printf("  Processing %d boundary pairs...\n", len(boundaryMap))
 	for key, vertices := range boundaryMap {
 		boundaryType := determineBoundaryType(planet.Plates[key[0]], planet.Plates[key[1]])
 		
@@ -113,6 +151,7 @@ func findPlateBoundaries(planet Planet) []PlateBoundary {
 		boundaries = append(boundaries, boundary)
 	}
 	
+	fmt.Printf("  Found %d plate boundaries\n", len(boundaries))
 	return boundaries
 }
 
@@ -152,11 +191,24 @@ func removeDuplicates(vertices []int) []int {
 
 // createOrganicPlates creates plates based on natural terrain features
 func createOrganicPlates(planet Planet, targetPlateCount int) Planet {
+	fmt.Printf("  Creating organic plates from %d vertices...\n", len(planet.Vertices))
+	
+	// Build neighbor cache first for efficient region growing
+	if planet.NeighborCache == nil {
+		startCache := time.Now()
+		planet = buildNeighborCache(planet)
+		fmt.Printf("    Built neighbor cache in %.2fs\n", time.Since(startCache).Seconds())
+	}
+	
 	// Find natural boundaries in the terrain
+	startRegions := time.Now()
 	regions := findNaturalRegions(planet)
+	fmt.Printf("    Found %d natural regions in %.2fs\n", len(regions), time.Since(startRegions).Seconds())
 	
 	// Merge small regions until we get close to target plate count
+	startMerge := time.Now()
 	regions = mergeSmallRegions(planet, regions, targetPlateCount)
+	fmt.Printf("    Merged to %d regions in %.2fs\n", len(regions), time.Since(startMerge).Seconds())
 	
 	// Convert regions to plates
 	plates := []Plate{}
@@ -227,8 +279,18 @@ func findNaturalRegions(planet Planet) [][]int {
 	visited := make([]bool, len(planet.Vertices))
 	var regions [][]int
 	
+	progressInterval := len(planet.Vertices) / 20
+	if progressInterval == 0 {
+		progressInterval = 1
+	}
+	
 	// Find regions based on terrain similarity
 	for i := range planet.Vertices {
+		if i%progressInterval == 0 {
+			progress := float64(i) / float64(len(planet.Vertices)) * 100
+			fmt.Printf("\r      Finding regions: %3.0f%% (%d regions found)", progress, len(regions))
+		}
+		
 		if !visited[i] {
 			region := growRegion(planet, i, visited)
 			if len(region) > 50 { // Minimum region size
@@ -237,6 +299,7 @@ func findNaturalRegions(planet Planet) [][]int {
 		}
 	}
 	
+	fmt.Printf("\r      Finding regions: 100%% (%d regions found)\n", len(regions))
 	return regions
 }
 
@@ -278,11 +341,12 @@ func growRegion(planet Planet, seedIdx int, visited []bool) []int {
 		visited[idx] = true
 		region = append(region, idx)
 		
-		// Find neighbors through triangles
-		neighbors := findVertexNeighbors(planet, idx)
-		for _, neighbor := range neighbors {
-			if !visited[neighbor] {
-				stack = append(stack, neighbor)
+		// Use cached neighbors for efficiency
+		if neighbors, ok := planet.NeighborCache[idx]; ok {
+			for _, neighbor := range neighbors {
+				if !visited[neighbor] {
+					stack = append(stack, neighbor)
+				}
 			}
 		}
 	}
@@ -357,7 +421,12 @@ func findBestNeighborRegion(planet Planet, regions [][]int, regionIdx int) int {
 	borderCounts := make(map[int]int)
 	
 	for _, vertexIdx := range region {
-		neighbors := findVertexNeighbors(planet, vertexIdx)
+		// Use cached neighbors for efficiency
+		neighbors := []int{}
+		if cached, ok := planet.NeighborCache[vertexIdx]; ok {
+			neighbors = cached
+		}
+		
 		for _, n := range neighbors {
 			// Find which region this neighbor belongs to
 			for i, r := range regions {
@@ -407,12 +476,19 @@ func generateRealisticVelocity(center Vector3, plateType PlateType) Vector3 {
 		Z: center.X*tangent1.Y - center.Y*tangent1.X,
 	}.Normalize()
 	
-	// Realistic plate speeds (scaled for simulation)
+	// More varied plate speeds for interesting simulation
 	var speed float64
 	if plateType == Oceanic {
-		speed = 0.002 + rand.Float64()*0.003 // Oceanic plates move faster
+		// Oceanic plates: some fast (spreading ridges), some slow
+		speed = 0.001 + rand.Float64()*0.008 // 0.001 to 0.009
 	} else {
-		speed = 0.001 + rand.Float64()*0.002 // Continental plates move slower
+		// Continental plates: wider variety for more interesting collisions
+		speed = 0.0005 + rand.Float64()*0.006 // 0.0005 to 0.0065
+	}
+	
+	// Occasionally create a very fast or very slow plate
+	if rand.Float64() < 0.2 {
+		speed *= 0.3 + rand.Float64()*2.0 // 30% to 230% of normal
 	}
 	
 	// Random direction

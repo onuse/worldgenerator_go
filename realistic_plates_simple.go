@@ -17,12 +17,14 @@ func updateRealisticPlatesSimple(planet Planet, deltaYears float64) Planet {
 		movement := plate.Velocity.Scale(scale)
 		plate.Center = plate.Center.Add(movement).Normalize()
 		
-		// Add small random perturbations
-		if rand.Float64() < 0.02 {
+		// Add random perturbations for more dynamic behavior
+		// Scale probability with time step to avoid resonance
+		perturbProb := 0.05 * math.Min(deltaYears/100000.0, 1.0)
+		if rand.Float64() < perturbProb {
 			plate.Velocity = plate.Velocity.Add(Vector3{
-				X: (rand.Float64() - 0.5) * 0.0001,
-				Y: (rand.Float64() - 0.5) * 0.0001,
-				Z: (rand.Float64() - 0.5) * 0.0001,
+				X: (rand.Float64() - 0.5) * 0.0005, // Larger perturbations
+				Y: (rand.Float64() - 0.5) * 0.0005,
+				Z: (rand.Float64() - 0.5) * 0.0005,
 			})
 			
 			// Keep velocity tangent to sphere
@@ -42,15 +44,14 @@ func updateRealisticPlatesSimple(planet Planet, deltaYears float64) Planet {
 
 // updateVertexOwnership assigns vertices based on proximity and plate strength
 func updateVertexOwnership(planet Planet, deltaYears float64) Planet {
-	// Update more frequently for smaller time steps, less for larger
-	updateFreq := 50000
-	if deltaYears > 1000000 {
-		updateFreq = 500000
-	}
-	
-	if int(planet.GeologicalTime) % updateFreq != 0 && deltaYears < 100000 {
+	// Update vertex ownership based on time elapsed, not modulo
+	// This avoids resonance at specific speeds
+	if !planet.NeedsOwnershipUpdate && deltaYears < 100000 {
 		return planet
 	}
+	
+	// Reset the flag
+	planet.NeedsOwnershipUpdate = false
 	
 	// Build a set of vertices near boundaries that need updating
 	boundaryVertices := make(map[int]bool)
@@ -174,6 +175,9 @@ func applyBoundaryInteractions(planet Planet, deltaYears float64) Planet {
 		planet = buildNeighborCache(planet)
 	}
 	
+	// Track height changes to apply them once at the end
+	heightDeltas := make([]float64, len(planet.Vertices))
+	
 	// Find and process boundaries
 	for i := range planet.Vertices {
 		v := &planet.Vertices[i]
@@ -198,41 +202,62 @@ func applyBoundaryInteractions(planet Planet, deltaYears float64) Planet {
 				direction := n.Position.Add(v.Position.Scale(-1)).Normalize()
 				convergence := relVel.Dot(direction)
 				
+				// Add deterministic variation based on position for varied terrain
+				// This prevents frame-to-frame randomness that causes spikes
+				posVar := math.Abs(v.Position.X*3.14159 + n.Position.Y*2.71828 + v.Position.Z*1.41421)
+				randomFactor := 0.8 + (math.Sin(posVar)*0.5+0.5)*0.4 // 0.8 to 1.2 deterministic
+				
 				// Subduction: oceanic under continental
 				if plate1.Type == Oceanic && plate2.Type == Continental && convergence > 0 {
-					// Oceanic plate goes down
-					v.Height -= 0.00002 * yearScale * convergence
-					// Volcanic arc on continental side
-					if rand.Float64() < 0.1 * convergence {
-						n.Height += 0.00003 * yearScale
+					// Oceanic plate goes down to form deep trench
+					heightDeltas[i] -= 0.00008 * yearScale * convergence * randomFactor
+					// Volcanic arc and varied mountain building on continental side
+					// Use continuous probability scaling to avoid discrete jumps
+					volcanicStrength := 0.4 * convergence * math.Min(yearScale, 1.0)
+					if volcanicStrength > 0.001 {
+						// Create varied heights for interesting terrain
+						mountainHeight := (0.00005 + rand.Float64() * 0.00015) * volcanicStrength
+						heightDeltas[nIdx] += mountainHeight * yearScale
 					}
 				} else if plate1.Type == Continental && plate2.Type == Oceanic && convergence < 0 {
 					// Other direction
-					n.Height -= 0.00002 * yearScale * math.Abs(convergence)
-					if rand.Float64() < 0.1 * math.Abs(convergence) {
-						v.Height += 0.00003 * yearScale
+					heightDeltas[nIdx] -= 0.00008 * yearScale * math.Abs(convergence) * randomFactor
+					// Use continuous probability scaling to avoid discrete jumps
+					volcanicStrength := 0.4 * math.Abs(convergence) * math.Min(yearScale, 1.0)
+					if volcanicStrength > 0.001 {
+						mountainHeight := (0.00005 + rand.Float64() * 0.00015) * volcanicStrength
+						heightDeltas[i] += mountainHeight * yearScale
 					}
 				} else if plate1.Type == Continental && plate2.Type == Continental && math.Abs(convergence) > 0.0001 {
-					// Continental collision - both go up
-					uplift := 0.00004 * yearScale * math.Abs(convergence)
-					v.Height += uplift
-					n.Height += uplift
+					// Continental collision - major mountain building (like Himalayas)
+					// Create mountain ranges with varied peaks
+					baseUplift := 0.0001 * yearScale * math.Abs(convergence)
+					// Use vertex position to create deterministic variation instead of random
+					posHash := math.Abs(v.Position.X*7919 + v.Position.Y*7927 + v.Position.Z*7933)
+					peakVariation := 1.0 + (math.Sin(posHash)*0.5+0.5)*0.5 // Deterministic 1.0-1.5
+					heightDeltas[i] += baseUplift * peakVariation * randomFactor
+					heightDeltas[nIdx] += baseUplift * (2.0 - peakVariation) * randomFactor // Complementary variation
 				} else if convergence < -0.0001 {
 					// Divergent boundary - rifting
-					subsidence := 0.00002 * yearScale * math.Abs(convergence)
-					v.Height -= subsidence
-					n.Height -= subsidence
-					
-					// New oceanic crust at divergent boundaries
-					if v.Height < -0.005 && n.Height < -0.005 {
-						if rand.Float64() < 0.1 {
-							v.Height = -0.003
-							n.Height = -0.003
-						}
-					}
+					subsidence := 0.00004 * yearScale * math.Abs(convergence) * randomFactor
+					heightDeltas[i] -= subsidence
+					heightDeltas[nIdx] -= subsidence
 				}
 			}
 		}
+	}
+	
+	// Apply accumulated height changes with limits to prevent spikes
+	for i := range planet.Vertices {
+		// Limit the maximum height change per frame to prevent spikes
+		maxDelta := 0.005 * yearScale // Max 5mm per million years
+		if heightDeltas[i] > maxDelta {
+			heightDeltas[i] = maxDelta
+		} else if heightDeltas[i] < -maxDelta {
+			heightDeltas[i] = -maxDelta
+		}
+		
+		planet.Vertices[i].Height += heightDeltas[i]
 	}
 	
 	return planet

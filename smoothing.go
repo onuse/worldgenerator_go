@@ -61,11 +61,11 @@ func clampHeightChanges(planet Planet, oldPlanet Planet, maxChange float64) Plan
 			}
 		}
 		
-		// Also enforce absolute limits
-		if planet.Vertices[i].Height > 0.08 {
-			planet.Vertices[i].Height = 0.08
-		} else if planet.Vertices[i].Height < -0.04 {
-			planet.Vertices[i].Height = -0.04
+		// Enforce more generous absolute limits for emergent features
+		if planet.Vertices[i].Height > 0.15 { // Allow taller mountains
+			planet.Vertices[i].Height = 0.15
+		} else if planet.Vertices[i].Height < -0.10 { // Allow deeper ocean trenches
+			planet.Vertices[i].Height = -0.10
 		}
 	}
 	
@@ -78,41 +78,40 @@ func buildNeighborCache(planet Planet) Planet {
 		planet.NeighborCache = make(map[int][]int)
 	}
 	
-	// Build edge map from triangles
-	edgeMap := make(map[[2]int]bool)
+	// Initialize neighbor lists for all vertices
+	for i := range planet.Vertices {
+		planet.NeighborCache[i] = []int{}
+	}
 	
+	// Build neighbor lists directly from triangles
+	// Use a set to avoid duplicates
+	neighborSets := make([]map[int]bool, len(planet.Vertices))
+	for i := range neighborSets {
+		neighborSets[i] = make(map[int]bool)
+	}
+	
+	// Process each triangle
 	for i := 0; i < len(planet.Indices); i += 3 {
 		v0 := int(planet.Indices[i])
 		v1 := int(planet.Indices[i+1])
 		v2 := int(planet.Indices[i+2])
 		
-		// Add edges (always store smaller index first)
-		addEdge := func(a, b int) {
-			if a > b {
-				a, b = b, a
-			}
-			edgeMap[[2]int{a, b}] = true
-		}
-		
-		addEdge(v0, v1)
-		addEdge(v1, v2)
-		addEdge(v2, v0)
+		// Each vertex in a triangle is a neighbor of the other two
+		neighborSets[v0][v1] = true
+		neighborSets[v0][v2] = true
+		neighborSets[v1][v0] = true
+		neighborSets[v1][v2] = true
+		neighborSets[v2][v0] = true
+		neighborSets[v2][v1] = true
 	}
 	
-	// Convert edge map to neighbor lists
-	for i := range planet.Vertices {
-		neighbors := []int{}
-		
-		// Check all possible edges
-		for edge := range edgeMap {
-			if edge[0] == i {
-				neighbors = append(neighbors, edge[1])
-			} else if edge[1] == i {
-				neighbors = append(neighbors, edge[0])
-			}
+	// Convert sets to slices
+	for i, neighbors := range neighborSets {
+		neighborList := make([]int, 0, len(neighbors))
+		for n := range neighbors {
+			neighborList = append(neighborList, n)
 		}
-		
-		planet.NeighborCache[i] = neighbors
+		planet.NeighborCache[i] = neighborList
 	}
 	
 	return planet

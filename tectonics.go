@@ -21,8 +21,12 @@ func updateTectonics(planet Planet, deltaYears float64) Planet {
 	planet = updateRealisticPlatesSimple(planet, deltaYears)
 	
 	// Update boundaries based on actual vertex assignments
-	if len(planet.Boundaries) == 0 || deltaYears > 10000 || int(planet.GeologicalTime) % 100000 == 0 {
+	// Avoid exact modulo checks that can resonate with specific speeds
+	timeSinceLastBoundaryUpdate := planet.GeologicalTime - planet.LastBoundaryUpdate
+	if len(planet.Boundaries) == 0 || deltaYears > 100000 || timeSinceLastBoundaryUpdate > 500000 {
 		planet.Boundaries = findPlateBoundaries(planet)
+		planet.LastBoundaryUpdate = planet.GeologicalTime
+		planet.NeedsOwnershipUpdate = true
 		
 		// Debug info
 		if deltaYears > 1000000 {
@@ -43,9 +47,10 @@ func updateTectonics(planet Planet, deltaYears float64) Planet {
 	if deltaYears < 1000000 {
 		planet = applyVolcanism(planet, deltaYears)
 	} else {
-		// For very large time steps, apply volcanism less frequently
-		if int(planet.GeologicalTime) % 5000000 == 0 {
+		// For very large time steps, apply volcanism based on time elapsed
+		if planet.GeologicalTime - planet.LastVolcanismUpdate > 5000000 {
 			planet = applyVolcanism(planet, 5000000)
+			planet.LastVolcanismUpdate = planet.GeologicalTime
 		}
 	}
 	
@@ -59,21 +64,33 @@ func updateTectonics(planet Planet, deltaYears float64) Planet {
 	}
 	
 	// Prevent spikes - clamp height changes based on time step
-	maxChange := 0.001 * (deltaYears / 1000.0) // Scale with time
-	if maxChange > 0.01 {
-		maxChange = 0.01 // Cap maximum change per frame
+	// More conservative at high speeds to prevent oscillations
+	maxChange := 0.0005 * (deltaYears / 1000.0) // Scale with time
+	if deltaYears > 1000000 {
+		// Even more conservative at very high speeds
+		maxChange = 0.0002 * (deltaYears / 1000000.0)
+	}
+	if maxChange > 0.005 {
+		maxChange = 0.005 // Lower cap for stability
 	}
 	planet = clampHeightChanges(planet, oldPlanet, maxChange)
 	
-	// Apply smoothing for realistic terrain at all speeds
-	iterations := 2 // Base smoothing for realistic features
-	if deltaYears >= 1000000 {
-		iterations = 3 // Extra smoothing at very high speeds
-	}
-	planet = smoothHeights(planet, iterations)
+	// Apply advanced geological processes for emergent features
+	planet = applyAdvancedHotspotVolcanism(planet, deltaYears)
+	planet = applyCratonStability(planet)
+	planet = applyDeepOceanTrenches(planet, deltaYears)
+	planet = applyHeightDependentErosion(planet, deltaYears)
+	planet = applySedimentDeposition(planet, deltaYears)
+	planet = applyIsostasticRebound(planet, deltaYears)
 	
-	// Preserve minimum landmass (30% of Earth's surface is land)
-	planet = preserveLandmass(planet, 0.3)
+	// Apply minimal smoothing only at very high speeds to prevent numerical instability
+	if deltaYears >= 10000000 {
+		// Only smooth at extreme speeds to prevent spikes
+		planet = smoothHeights(planet, 1)
+	}
+	
+	// No need to artificially preserve landmass - let simulation run naturally
+	// planet = preserveLandmass(planet, 0.3)
 	
 	// Positions should never change - only heights are modified
 	

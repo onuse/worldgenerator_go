@@ -1,0 +1,14 @@
+{
+  "simulation": {
+    "icosphereLevel": 7,
+    "comment": "Level 5 = ~10k vertices, Level 6 = ~40k vertices, Level 7 = ~160k vertices, Level 8 = ~650k vertices"
+  },
+  "server": {
+    "port": 8080,
+    "updateIntervalMs": 100
+  },
+  "gpu": {
+    "preferMetal": true,
+    "preferOpenCL": false
+  }
+}

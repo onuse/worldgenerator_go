@@ -28,7 +28,7 @@ typedef struct {
     int plateType;
 } MetalPlateData;
 
-int runMetalVertexOwnership(SimpleMetalContext* ctx, MetalVertexData* vertices, MetalPlateData* plates, 
+int runMetalVertexOwnership(SimpleMetalContext* ctx, MetalVertexData* vertices, MetalPlateData* plates,
                            int* boundaryVertices, int vertexCount, int plateCount, int boundaryCount);
 
 SimpleMetalContext* createSimpleMetalContext() {
@@ -62,21 +62,28 @@ SimpleMetalContext* createSimpleMetalContext() {
             "                        uint index [[thread_position_in_grid]]) {\n"
             "    if (index >= count) return;\n"
             "    float h = heights[index];\n"
-            "    if (h > 0.01f) {\n"
-            "        // Only erode higher elevations\n"
-            "        float erosion = 0.000003f * scale;\n"
-            "        if (h > 0.03f) erosion *= 2.0f;\n"
-            "        else if (h > 0.02f) erosion *= 1.5f;\n"
-            "        // Don't erode below a minimum elevation\n"
-            "        heights[index] = max(h - erosion, 0.005f);\n"
-            "    } else if (h > 0.001f && h < 0.01f) {\n"
-            "        // Very slow erosion for low elevations\n"
-            "        float erosion = 0.000001f * scale;\n"
-            "        heights[index] = max(h - erosion, 0.001f);\n"
-            "    } else if (h < -0.01f) {\n"
-            "        // Isostatic rebound for deep ocean\n"
-            "        float rebound = 0.000002f * scale;\n"
-            "        heights[index] = min(h + rebound, -0.001f);\n"
+            "    if (h > 0.0f) {\n"
+            "        // Continuous erosion function - no discrete bands\n"
+            "        float baseErosion = 0.0000005f * scale;\n"
+            "        // Exponential increase with height\n"
+            "        float heightFactor = 1.0f + h * 20.0f; // More erosion at higher elevations\n"
+            "        float erosion = baseErosion * heightFactor;\n"
+            "        // Add some randomness to prevent uniform surfaces\n"
+            "        float random = fract(sin(float(index) * 12.9898f) * 43758.5453f);\n"
+            "        erosion *= (0.9f + random * 0.2f);\n"
+            "        heights[index] = h - erosion;\n"
+            "    } else if (h < -0.001f) {\n"
+            "        // Ocean floor processes\n"
+            "        float depth = -h;\n"
+            "        if (depth > 0.05f) {\n"
+            "            // Deep ocean - very slow isostatic rebound\n"
+            "            float rebound = 0.0000002f * scale * (depth / 0.1f);\n"
+            "            heights[index] = h + rebound;\n"
+            "        } else {\n"
+            "            // Shallow ocean - sediment accumulation\n"
+            "            float sediment = 0.0000005f * scale * (1.0f - depth / 0.05f);\n"
+            "            heights[index] = h + sediment;\n"
+            "        }\n"
             "    }\n"
             "}\n"
             "\n"
@@ -277,7 +284,7 @@ int runMetalErosion(SimpleMetalContext* ctx, float* heights, float scale, int co
     }
 }
 
-int runMetalVertexOwnership(SimpleMetalContext* ctx, MetalVertexData* vertices, MetalPlateData* plates, 
+int runMetalVertexOwnership(SimpleMetalContext* ctx, MetalVertexData* vertices, MetalPlateData* plates,
                            int* boundaryVertices, int vertexCount, int plateCount, int boundaryCount) {
     @autoreleasepool {
         id<MTLDevice> device = (__bridge id<MTLDevice>)ctx->device;
@@ -374,7 +381,7 @@ func (gpu *SimpleMetalGPU) UpdateTectonics(planet Planet, deltaYears float64) Pl
 
 		// For very large time steps, also do bulk height updates on GPU
 		if deltaYears > 100000 {
-			fmt.Printf("GPU: Running tectonic acceleration for deltaYears=%.0f\n", deltaYears)
+			//fmt.Printf("GPU: Running tectonic acceleration for deltaYears=%.0f\n", deltaYears)
 			planet = gpu.accelerateTectonics(planet, deltaYears)
 		}
 
@@ -538,43 +545,60 @@ func updateTectonicsWithoutErosion(planet Planet, deltaYears float64) Planet {
 	for i, v := range planet.Vertices {
 		oldPlanet.Vertices[i].Height = v.Height
 	}
-	
+
 	planet.GeologicalTime += deltaYears
 
 	// Use realistic plate movement
 	planet = updateRealisticPlatesSimple(planet, deltaYears)
 
-	// Only update boundaries periodically or when plates have moved significant
-	if len(planet.Boundaries) == 0 || deltaYears > 100000 || int(planet.GeologicalTime)%1000000 == 0 {
+	// Only update boundaries periodically or when plates have moved significantly
+	// Avoid exact modulo checks that can resonate with specific speeds
+	timeSinceLastBoundaryUpdate := planet.GeologicalTime - planet.LastBoundaryUpdate
+	if len(planet.Boundaries) == 0 || deltaYears > 500000 || timeSinceLastBoundaryUpdate > 1000000 {
 		planet.Boundaries = findPlateBoundaries(planet)
+		planet.LastBoundaryUpdate = planet.GeologicalTime
+		planet.NeedsOwnershipUpdate = true
 	}
 
 	// Apply volcanic activity (less frequent for large time steps)
 	if deltaYears < 1000000 {
 		planet = applyVolcanism(planet, deltaYears)
 	} else {
-		// For very large time steps, apply volcanism less frequently
-		if int(planet.GeologicalTime)%5000000 == 0 {
+		// For very large time steps, apply volcanism based on time elapsed
+		if planet.GeologicalTime - planet.LastVolcanismUpdate > 5000000 {
 			planet = applyVolcanism(planet, 5000000)
+			planet.LastVolcanismUpdate = planet.GeologicalTime
 		}
 	}
-	
+
 	// Prevent spikes - clamp height changes based on time step
-	maxChange := 0.001 * (deltaYears / 1000.0) // Scale with time
-	if maxChange > 0.01 {
-		maxChange = 0.01 // Cap maximum change per frame
+	// More conservative at high speeds to prevent oscillations
+	maxChange := 0.0005 * (deltaYears / 1000.0) // Scale with time
+	if deltaYears > 1000000 {
+		// Even more conservative at very high speeds
+		maxChange = 0.0002 * (deltaYears / 1000000.0)
+	}
+	if maxChange > 0.005 {
+		maxChange = 0.005 // Lower cap for stability
 	}
 	planet = clampHeightChanges(planet, oldPlanet, maxChange)
 	
-	// Apply smoothing for realistic terrain at all speeds
-	iterations := 2 // Base smoothing for realistic features
-	if deltaYears >= 1000000 {
-		iterations = 3 // Extra smoothing at very high speeds
+	// Apply advanced geological processes for emergent features
+	planet = applyAdvancedHotspotVolcanism(planet, deltaYears)
+	planet = applyCratonStability(planet)
+	planet = applyDeepOceanTrenches(planet, deltaYears)
+	// Height-dependent erosion is handled by GPU
+	planet = applySedimentDeposition(planet, deltaYears)
+	planet = applyIsostasticRebound(planet, deltaYears)
+
+	// Apply minimal smoothing only at very high speeds to prevent numerical instability
+	if deltaYears >= 10000000 {
+		// Only smooth at extreme speeds to prevent spikes
+		planet = smoothHeights(planet, 1)
 	}
-	planet = smoothHeights(planet, iterations)
-	
-	// Preserve minimum landmass
-	planet = preserveLandmass(planet, 0.3)
+
+	// No need to artificially preserve landmass - let simulation run naturally
+	// planet = preserveLandmass(planet, 0.3)
 
 	// Erosion is handled separately by Metal backend
 

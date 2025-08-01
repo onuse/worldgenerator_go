@@ -36,6 +36,7 @@ type Vertex struct {
 	PlateID     int
 	Temperature float64
 	Moisture    float64
+	IsCraton    bool // Stable continental core
 }
 
 type PlateType int
@@ -76,8 +77,11 @@ type Planet struct {
 	Plates         []Plate
 	Boundaries     []PlateBoundary
 	TimeSpeed      float64
-	GeologicalTime float64
-	ShowWater      bool
-	Hotspots       []Hotspot
-	NeighborCache  map[int][]int // Cache vertex neighbors
+	GeologicalTime       float64
+	LastBoundaryUpdate   float64
+	LastVolcanismUpdate  float64
+	NeedsOwnershipUpdate bool
+	ShowWater            bool
+	Hotspots             []Hotspot
+	NeighborCache        map[int][]int // Cache vertex neighbors
 }

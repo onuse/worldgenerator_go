@@ -14,11 +14,11 @@ func generateIcosphere(subdivisions int) Planet {
 	// Golden ratio
 	t := (1.0 + math.Sqrt(5.0)) / 2.0
 
-	// Initial icosahedron vertices
+	// Initial icosahedron vertices (with IsCraton field)
 	vertices := []Vertex{
-		{Vector3{-1, t, 0}, 0, 0, 0, 0}, {Vector3{1, t, 0}, 0, 0, 0, 0}, {Vector3{-1, -t, 0}, 0, 0, 0, 0}, {Vector3{1, -t, 0}, 0, 0, 0, 0},
-		{Vector3{0, -1, t}, 0, 0, 0, 0}, {Vector3{0, 1, t}, 0, 0, 0, 0}, {Vector3{0, -1, -t}, 0, 0, 0, 0}, {Vector3{0, 1, -t}, 0, 0, 0, 0},
-		{Vector3{t, 0, -1}, 0, 0, 0, 0}, {Vector3{t, 0, 1}, 0, 0, 0, 0}, {Vector3{-t, 0, -1}, 0, 0, 0, 0}, {Vector3{-t, 0, 1}, 0, 0, 0, 0},
+		{Vector3{-1, t, 0}, 0, 0, 0, 0, false}, {Vector3{1, t, 0}, 0, 0, 0, 0, false}, {Vector3{-1, -t, 0}, 0, 0, 0, 0, false}, {Vector3{1, -t, 0}, 0, 0, 0, 0, false},
+		{Vector3{0, -1, t}, 0, 0, 0, 0, false}, {Vector3{0, 1, t}, 0, 0, 0, 0, false}, {Vector3{0, -1, -t}, 0, 0, 0, 0, false}, {Vector3{0, 1, -t}, 0, 0, 0, 0, false},
+		{Vector3{t, 0, -1}, 0, 0, 0, 0, false}, {Vector3{t, 0, 1}, 0, 0, 0, 0, false}, {Vector3{-t, 0, -1}, 0, 0, 0, 0, false}, {Vector3{-t, 0, 1}, 0, 0, 0, 0, false},
 	}
 
 	// Initial icosahedron faces

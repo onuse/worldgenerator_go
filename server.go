@@ -38,9 +38,21 @@ var clients = make(map[*websocket.Conn]*sync.Mutex)
 var clientsMutex sync.RWMutex
 
 func startServer() {
-	// Initialize planet with high resolution that browsers can handle
-	globalPlanet = generateIcosphere(5) // Level 5 = ~10,000 vertices - good balance of detail/performance
+	// Load settings
+	if err := loadSettings(); err != nil {
+		log.Fatalf("Failed to load settings: %v", err)
+	}
+	
+	// Initialize planet with resolution from settings
+	fmt.Printf("Initializing planet at level %d...\n", globalSettings.Simulation.IcosphereLevel)
+	startIcosphere := time.Now()
+	globalPlanet = generateIcosphere(globalSettings.Simulation.IcosphereLevel)
+	fmt.Printf("  Icosphere generation: %.2fs (%d vertices)\n", time.Since(startIcosphere).Seconds(), len(globalPlanet.Vertices))
+	
+	startPlates := time.Now()
 	globalPlanet = generateTectonicPlates(globalPlanet, 8)
+	fmt.Printf("  Plate generation: %.2fs\n", time.Since(startPlates).Seconds())
+	
 	globalPlanet.TimeSpeed = 10000.0 // Start at higher speed for visible changes
 	globalPlanet.ShowWater = true
 	
@@ -69,8 +81,10 @@ func startServer() {
 	http.HandleFunc("/ws", handleWebSocket)
 	http.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir("web/static/"))))
 
-	fmt.Println("Server starting on http://localhost:8080")
-	log.Fatal(http.ListenAndServe(":8080", nil))
+	fmt.Printf("Server starting on http://localhost:%d\n", globalSettings.Server.Port)
+	addr := fmt.Sprintf(":%d", globalSettings.Server.Port)
+	fmt.Printf("Starting server on %s\n", addr)
+	log.Fatal(http.ListenAndServe(addr, nil))
 }
 
 func serveHome(w http.ResponseWriter, r *http.Request) {
@@ -119,7 +133,7 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 }
 
 func simulationLoop() {
-	ticker := time.NewTicker(time.Millisecond * 100) // 10fps updates
+	ticker := time.NewTicker(time.Millisecond * time.Duration(globalSettings.Server.UpdateIntervalMs))
 	defer ticker.Stop()
 	
 	updateCount := 0
@@ -131,8 +145,9 @@ func simulationLoop() {
 		// Update simulation
 		var simTime time.Duration
 		if globalPlanet.TimeSpeed > 0 {
-			// Calculate how many years pass in this update (100ms)
-			yearsPerUpdate := globalPlanet.TimeSpeed / 10.0 // 10 updates per second
+			// Calculate how many years pass in this update
+			updatesPerSecond := 1000.0 / float64(globalSettings.Server.UpdateIntervalMs)
+			yearsPerUpdate := globalPlanet.TimeSpeed / updatesPerSecond
 			
 			// Optimize for different speed ranges
 			simStart := time.Now()

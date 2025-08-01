@@ -61,10 +61,15 @@ func applySubductionVolcanism(planet Planet, scale float64) Planet {
 			}
 			
 			// Volcanic activity probability
-			if rand.Float64() < 0.01 * scale { // 1% chance per My
-				// Build volcanic cone
-				uplift := 0.001 + rand.Float64()*0.002
-				v.Height += uplift * scale
+			// Use smoothed probability to avoid resonance at 1Myr/s
+			prob := 0.01 * scale
+			if prob > 0.005 {
+				prob = 0.005 + (prob-0.005)*0.5 // Soften the probability curve
+			}
+			if rand.Float64() < prob {
+				// Build volcanic cone with time-scaled uplift
+				uplift := (0.001 + rand.Float64()*0.002) * math.Min(scale, 1.0)
+				v.Height += uplift
 				
 				// Cap volcano height
 				if v.Height > 0.05 {
@@ -75,7 +80,7 @@ func applySubductionVolcanism(planet Planet, scale float64) Planet {
 				neighbors := findVertexNeighbors(planet, vertexIdx)
 				for _, n := range neighbors {
 					if n < len(planet.Vertices) && planet.Vertices[n].PlateID == volcanicPlate {
-						planet.Vertices[n].Height += uplift * scale * 0.5
+						planet.Vertices[n].Height += uplift * 0.5
 						if planet.Vertices[n].Height > 0.04 {
 							planet.Vertices[n].Height = 0.04
 						}
@@ -110,8 +115,13 @@ func applyDivergentVolcanism(planet Planet, scale float64) Planet {
 			// Mid-ocean ridges are elevated but underwater
 			if v.Height < -0.005 {
 				// Small chance of pillow basalt formation
-				if rand.Float64() < 0.05 * scale {
-					v.Height += 0.0002 * scale
+				// Smooth probability to avoid resonance
+				prob := 0.05 * scale
+				if prob > 0.02 {
+					prob = 0.02 + (prob-0.02)*0.5
+				}
+				if rand.Float64() < prob {
+					v.Height += 0.0002 * math.Min(scale, 1.0)
 					
 					// Keep underwater
 					if v.Height > -0.003 {
@@ -174,9 +184,14 @@ func applyHotspotVolcanism(planet Planet, scale float64) Planet {
 			v := &planet.Vertices[nearestVertex]
 			
 			// Build volcanic island
-			if rand.Float64() < hotspot.Intensity * scale * 0.1 {
-				uplift := 0.0005 * hotspot.Intensity
-				v.Height += uplift * scale
+			// Smooth probability to avoid resonance
+			prob := hotspot.Intensity * scale * 0.1
+			if prob > 0.03 {
+				prob = 0.03 + (prob-0.03)*0.5
+			}
+			if rand.Float64() < prob {
+				uplift := 0.0005 * hotspot.Intensity * math.Min(scale, 1.0)
+				v.Height += uplift
 				
 				// Create shield volcano shape
 				neighbors := findVertexNeighbors(planet, nearestVertex)
@@ -185,7 +200,7 @@ func applyHotspotVolcanism(planet Planet, scale float64) Planet {
 						neighborDist := distance(planet.Vertices[n].Position.Normalize(), hotspot.Position)
 						if neighborDist < 0.08 {
 							falloff := 1.0 - (neighborDist / 0.08)
-							planet.Vertices[n].Height += uplift * scale * falloff * 0.7
+							planet.Vertices[n].Height += uplift * falloff * 0.7
 							// Position stays on unit sphere - height is separate
 						}
 					}

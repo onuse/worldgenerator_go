@@ -1,6 +1,9 @@
 package main
 
-import "math"
+import (
+	"fmt"
+	"math"
+)
 
 
 
@@ -14,8 +17,8 @@ func generateRealisticContinents(planet Planet) Planet {
 	// Apply isostatic adjustment
 	planet = applyIsostasy(planet)
 	
-	// Apply smoothing for realistic terrain features from the start
-	planet = smoothHeights(planet, 2)
+	// Don't smooth initial terrain - preserve the fractal detail
+	// planet = smoothHeights(planet, 2)
 	
 	return planet
 }
@@ -23,7 +26,17 @@ func generateRealisticContinents(planet Planet) Planet {
 
 
 func applyFractalTerrain(planet Planet) Planet {
+	progressInterval := len(planet.Vertices) / 20
+	if progressInterval == 0 {
+		progressInterval = 1
+	}
+	
 	for i := range planet.Vertices {
+		if i%progressInterval == 0 {
+			progress := float64(i) / float64(len(planet.Vertices)) * 100
+			fmt.Printf("\r    Applying fractal terrain: %3.0f%%", progress)
+		}
+		
 		pos := planet.Vertices[i].Position // Should already be normalized
 		
 		// Continental-scale features (very low frequency)
@@ -79,6 +92,7 @@ func applyFractalTerrain(planet Planet) Planet {
 		// Don't modify the position - it should remain on the unit sphere
 	}
 	
+	fmt.Printf("\r    Applying fractal terrain: 100%%\n")
 	return planet
 }
 
