@@ -7,17 +7,24 @@ import (
 )
 
 func updateTectonics(planet Planet, deltaYears float64) Planet {
+	// Store old heights for spike prevention
+	oldPlanet := Planet{
+		Vertices: make([]Vertex, len(planet.Vertices)),
+	}
+	for i, v := range planet.Vertices {
+		oldPlanet.Vertices[i].Height = v.Height
+	}
+	
 	planet.GeologicalTime += deltaYears
 	
-	// Move plates as rigid bodies
-	planet = movePlates(planet, deltaYears)
+	// Use realistic plate movement for high fidelity
+	planet = updateRealisticPlatesSimple(planet, deltaYears)
 	
-	// Only update boundaries periodically or when plates have moved significantly
-	// Boundaries don't change much over short timescales
-	if len(planet.Boundaries) == 0 || deltaYears > 100000 || int(planet.GeologicalTime) % 1000000 == 0 {
+	// Update boundaries based on actual vertex assignments
+	if len(planet.Boundaries) == 0 || deltaYears > 10000 || int(planet.GeologicalTime) % 100000 == 0 {
 		planet.Boundaries = findPlateBoundaries(planet)
 		
-		// Debug boundary types
+		// Debug info
 		if deltaYears > 1000000 {
 			convergent, divergent, transform := 0, 0, 0
 			for _, b := range planet.Boundaries {
@@ -27,13 +34,10 @@ func updateTectonics(planet Planet, deltaYears float64) Planet {
 				case Transform: transform++
 				}
 			}
-			fmt.Printf("DEBUG: %.0f My - Conv:%d Div:%d Trans:%d\n", 
-				planet.GeologicalTime/1000000.0, convergent, divergent, transform)
+			fmt.Printf("DEBUG: %.0f My - Plates:%d Conv:%d Div:%d Trans:%d\n", 
+				planet.GeologicalTime/1000000.0, len(planet.Plates), convergent, divergent, transform)
 		}
 	}
-	
-	// Apply tectonic processes at boundaries
-	planet = applyTectonicProcesses(planet, deltaYears)
 	
 	// Apply volcanic activity (less frequent for large time steps)
 	if deltaYears < 1000000 {
@@ -53,6 +57,23 @@ func updateTectonics(planet Planet, deltaYears float64) Planet {
 			planet = applyIsostasticAdjustment(planet, deltaYears)
 		}
 	}
+	
+	// Prevent spikes - clamp height changes based on time step
+	maxChange := 0.001 * (deltaYears / 1000.0) // Scale with time
+	if maxChange > 0.01 {
+		maxChange = 0.01 // Cap maximum change per frame
+	}
+	planet = clampHeightChanges(planet, oldPlanet, maxChange)
+	
+	// Apply smoothing for realistic terrain at all speeds
+	iterations := 2 // Base smoothing for realistic features
+	if deltaYears >= 1000000 {
+		iterations = 3 // Extra smoothing at very high speeds
+	}
+	planet = smoothHeights(planet, iterations)
+	
+	// Preserve minimum landmass (30% of Earth's surface is land)
+	planet = preserveLandmass(planet, 0.3)
 	
 	// Positions should never change - only heights are modified
 	
@@ -87,6 +108,10 @@ func movePlates(planet Planet, deltaYears float64) Planet {
 			planet.Plates[i].Velocity = vel.Add(radialComponent.Scale(-1))
 		}
 	}
+	
+	// Reassign vertices to plates after movement
+	// This ensures boundaries visually update as plates move
+	planet = updateVoronoiAssignment(planet)
 	
 	return planet
 }
@@ -198,13 +223,13 @@ func applyConvergentBoundary(planet Planet, boundary PlateBoundary, deltaYears f
 			v := &planet.Vertices[vertexIdx]
 			
 			if v.PlateID == upperPlate {
-				v.Height += upliftRate * 0.001 // Scale for reasonable growth
+				v.Height += upliftRate * 0.0001 // Reduced rate to prevent spikes
 				// Cap maximum height
 				if v.Height > 0.08 {
 					v.Height = 0.08
 				}
 			} else if v.PlateID == lowerPlate {
-				v.Height -= subductRate * 0.0008
+				v.Height -= subductRate * 0.00008
 				// Cap minimum depth
 				if v.Height < -0.04 {
 					v.Height = -0.04
@@ -243,12 +268,12 @@ func applyConvergentBoundary(planet Planet, boundary PlateBoundary, deltaYears f
 			falloff *= falloff // Quadratic falloff
 			
 			if v.PlateID == upperPlate {
-				v.Height += upliftRate * 0.0005 * falloff
+				v.Height += upliftRate * 0.00005 * falloff
 				if v.Height > 0.08 {
 					v.Height = 0.08
 				}
 			} else {
-				v.Height -= subductRate * 0.0004 * falloff
+				v.Height -= subductRate * 0.00004 * falloff
 				if v.Height < -0.04 {
 					v.Height = -0.04
 				}
@@ -286,9 +311,9 @@ func applyDivergentBoundary(planet Planet, boundary PlateBoundary, deltaYears fl
 			
 			// Create rift valley in continental crust
 			if v.Height > -0.005 { // Continental or shallow
-				v.Height -= riftRate * 0.0008
+				v.Height -= riftRate * 0.00008
 			} else { // Oceanic - create mid-ocean ridge
-				v.Height += upliftRate * 0.0004
+				v.Height += upliftRate * 0.00004
 			}
 			
 			// Cap heights

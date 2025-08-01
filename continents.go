@@ -14,6 +14,9 @@ func generateRealisticContinents(planet Planet) Planet {
 	// Apply isostatic adjustment
 	planet = applyIsostasy(planet)
 	
+	// Apply smoothing for realistic terrain features from the start
+	planet = smoothHeights(planet, 2)
+	
 	return planet
 }
 

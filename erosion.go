@@ -109,10 +109,7 @@ func applyGlacialErosion(planet Planet, scale float64) Planet {
 			}
 			
 			v.Height -= erosionRate
-			
-			// Glacial valleys are U-shaped, so we smooth nearby areas
-			radius := 1.0 + v.Height
-			v.Position = v.Position.Normalize().Scale(radius)
+			// Position stays on unit sphere - height is separate
 		}
 	}
 	
@@ -129,9 +126,7 @@ func applySedimentation(planet Planet, scale float64) Planet {
 		if v.Height < -0.02 {
 			sedimentRate := 0.000002 * scale * rand.Float64()
 			v.Height += sedimentRate
-			
-			radius := 1.0 + v.Height
-			v.Position = v.Position.Normalize().Scale(radius)
+			// Position stays on unit sphere - height is separate
 		}
 	}
 	

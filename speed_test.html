@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Speed Test</title>
+    <style>
+        body { font-family: monospace; padding: 20px; }
+        button { margin: 5px; padding: 10px 20px; font-size: 16px; }
+        #log { border: 1px solid #ccc; padding: 10px; height: 400px; overflow-y: auto; }
+        .speed-test { margin: 10px 0; padding: 10px; background: #f0f0f0; }
+    </style>
+</head>
+<body>
+    <h1>Simulation Speed Test</h1>
+    <div>
+        <button onclick="testSpeed(0)">Pause</button>
+        <button onclick="testSpeed(1000)">1,000 yr/s</button>
+        <button onclick="testSpeed(10000)">10,000 yr/s</button>
+        <button onclick="testSpeed(100000)">100,000 yr/s</button>
+        <button onclick="testSpeed(1000000)">1M yr/s</button>
+        <button onclick="testSpeed(10000000)">10M yr/s</button>
+        <button onclick="testSpeed(100000000)">100M yr/s</button>
+    </div>
+    <div id="log"></div>
+
+    <script>
+        const log = document.getElementById('log');
+        let ws = null;
+        let currentTest = null;
+
+        function connect() {
+            ws = new WebSocket('ws://localhost:8080/ws');
+            ws.onopen = () => addLog('WebSocket connected');
+            ws.onmessage = (e) => {
+                if (currentTest) {
+                    currentTest.messages++;
+                    const data = JSON.parse(e.data);
+                    currentTest.time = data.time;
+                }
+            };
+            ws.onerror = (e) => addLog('WebSocket error: ' + e);
+            ws.onclose = () => {
+                addLog('WebSocket closed');
+                ws = null;
+            };
+        }
+
+        function addLog(msg) {
+            const entry = document.createElement('div');
+            entry.textContent = new Date().toISOString().substr(11, 12) + ' ' + msg;
+            log.appendChild(entry);
+            log.scrollTop = log.scrollHeight;
+        }
+
+        function testSpeed(speed) {
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                addLog('Connecting...');
+                connect();
+                setTimeout(() => testSpeed(speed), 1000);
+                return;
+            }
+
+            // Start test
+            const testDiv = document.createElement('div');
+            testDiv.className = 'speed-test';
+            testDiv.innerHTML = `<b>Testing ${speed.toLocaleString()} yr/s...</b>`;
+            log.appendChild(testDiv);
+
+            currentTest = {
+                speed: speed,
+                startTime: Date.now(),
+                messages: 0,
+                time: 0,
+                div: testDiv
+            };
+
+            // Send speed change
+            ws.send(JSON.stringify({ timeSpeed: speed }));
+            addLog(`Sent speed change to ${speed.toLocaleString()} yr/s`);
+
+            // Measure for 3 seconds
+            setTimeout(() => {
+                const elapsed = (Date.now() - currentTest.startTime) / 1000;
+                const fps = currentTest.messages / elapsed;
+                const simYears = currentTest.time;
+                const effectiveSpeed = simYears / elapsed;
+
+                currentTest.div.innerHTML += `<br>
+                    Duration: ${elapsed.toFixed(1)}s<br>
+                    Messages: ${currentTest.messages} (${fps.toFixed(1)} fps)<br>
+                    Sim Time: ${(simYears/1000000).toFixed(2)} My<br>
+                    Effective: ${effectiveSpeed.toLocaleString()} yr/s<br>
+                    Efficiency: ${(effectiveSpeed/speed*100).toFixed(1)}%
+                `;
+
+                currentTest = null;
+            }, 3000);
+        }
+
+        // Connect on load
+        connect();
+    </script>
+</body>
+</html>

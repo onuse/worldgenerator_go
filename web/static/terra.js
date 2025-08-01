@@ -195,7 +195,33 @@ class TerraRenderer {
     }
 
     getVertexColor(height, plateId) {
-        if (this.heightmapMode) {
+        if (this.plateViewMode) {
+            // Color by plate ID
+            const colors = [
+                { r: 0.8, g: 0.2, b: 0.2 }, // Red
+                { r: 0.2, g: 0.8, b: 0.2 }, // Green
+                { r: 0.2, g: 0.2, b: 0.8 }, // Blue
+                { r: 0.8, g: 0.8, b: 0.2 }, // Yellow
+                { r: 0.8, g: 0.2, b: 0.8 }, // Magenta
+                { r: 0.2, g: 0.8, b: 0.8 }, // Cyan
+                { r: 0.8, g: 0.5, b: 0.2 }, // Orange
+                { r: 0.5, g: 0.2, b: 0.8 }, // Purple
+                { r: 0.5, g: 0.8, b: 0.5 }, // Light green
+                { r: 0.8, g: 0.5, b: 0.5 }, // Pink
+                { r: 0.5, g: 0.5, b: 0.8 }, // Light blue
+                { r: 0.8, g: 0.8, b: 0.5 }  // Light yellow
+            ];
+            const color = colors[plateId % colors.length];
+            // Darken underwater areas
+            if (height < 0 && this.showWater) {
+                return {
+                    r: color.r * 0.3,
+                    g: color.g * 0.3,
+                    b: color.b * 0.3
+                };
+            }
+            return color;
+        } else if (this.heightmapMode) {
             // Pure heightmap coloring
             const normalized = (height + 0.1) / 0.2; // Normalize height range
             const clamped = Math.max(0, Math.min(1, normalized));

@@ -34,7 +34,7 @@ var upgrader = websocket.Upgrader{
 }
 
 var globalPlanet Planet
-var clients = make(map[*websocket.Conn]bool)
+var clients = make(map[*websocket.Conn]*sync.Mutex)
 var clientsMutex sync.RWMutex
 
 func startServer() {
@@ -85,8 +85,9 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close()
 
+	connMutex := &sync.Mutex{}
 	clientsMutex.Lock()
-	clients[conn] = true
+	clients[conn] = connMutex
 	clientsMutex.Unlock()
 	defer func() {
 		clientsMutex.Lock()
@@ -107,9 +108,11 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if speed, ok := msg["timeSpeed"].(float64); ok {
+			fmt.Printf("SPEED CHANGE: %.0f yr/s -> %.0f yr/s\n", globalPlanet.TimeSpeed, speed)
 			globalPlanet.TimeSpeed = speed
 		}
 		if showWater, ok := msg["showWater"].(bool); ok {
+			fmt.Printf("SHOW WATER: %v\n", showWater)
 			globalPlanet.ShowWater = showWater
 		}
 	}
@@ -120,84 +123,83 @@ func simulationLoop() {
 	defer ticker.Stop()
 	
 	updateCount := 0
+	lastPrintTime := time.Now()
 
 	for range ticker.C {
+		frameStart := time.Now()
+		
 		// Update simulation
+		var simTime time.Duration
 		if globalPlanet.TimeSpeed > 0 {
 			// Calculate how many years pass in this update (100ms)
 			yearsPerUpdate := globalPlanet.TimeSpeed / 10.0 // 10 updates per second
 			
 			// Optimize for different speed ranges
-			if yearsPerUpdate > 10000000 { // More than 10 million years per update
-				// Single very large step - geological processes average out
-				globalPlanet = computeBackend.UpdateTectonics(globalPlanet, yearsPerUpdate)
-			} else if yearsPerUpdate > 1000000 { // 1M-10M years per update
-				// A few large steps
-				stepSize := 1000000.0
-				steps := int(yearsPerUpdate / stepSize)
-				for i := 0; i < steps; i++ {
-					globalPlanet = computeBackend.UpdateTectonics(globalPlanet, stepSize)
-				}
-				remainder := yearsPerUpdate - float64(steps)*stepSize
-				if remainder > 100000 { // Only bother with significant remainders
-					globalPlanet = computeBackend.UpdateTectonics(globalPlanet, remainder)
-				}
-			} else if yearsPerUpdate > 100000 { // 100k-1M years per update
-				// Medium steps
-				stepSize := 100000.0
-				steps := int(yearsPerUpdate / stepSize)
-				for i := 0; i < steps; i++ {
-					globalPlanet = computeBackend.UpdateTectonics(globalPlanet, stepSize)
-				}
-			} else if yearsPerUpdate > 10000 { // 10k-100k years per update
-				// Smaller steps for accuracy
-				stepSize := 10000.0
-				steps := int(yearsPerUpdate / stepSize)
-				for i := 0; i < steps; i++ {
-					globalPlanet = computeBackend.UpdateTectonics(globalPlanet, stepSize)
-				}
-			} else {
-				// Small time steps for accuracy at low speeds
-				stepSize := 1000.0
-				if yearsPerUpdate < 1000 {
-					stepSize = yearsPerUpdate
-				}
-				steps := int(yearsPerUpdate / stepSize)
-				for i := 0; i < steps; i++ {
-					globalPlanet = computeBackend.UpdateTectonics(globalPlanet, stepSize)
-				}
-			}
+			simStart := time.Now()
+			
+			// Always do single update to keep things responsive
+			// The tectonic simulation will handle large time steps internally
+			globalPlanet = computeBackend.UpdateTectonics(globalPlanet, yearsPerUpdate)
+			
+			simTime = time.Since(simStart)
 			
 			// Debug output every 10 updates to see if simulation is running
 			updateCount++
-			if updateCount % 10 == 0 {
+			
+			// Measure simulation time
+			simTime := time.Since(frameStart)
+			
+			// Print timing info every second
+			if time.Since(lastPrintTime) > time.Second {
+				lastPrintTime = time.Now()
+				
 				// Check if heights are changing
 				minH, maxH := globalPlanet.Vertices[0].Height, globalPlanet.Vertices[0].Height
 				for _, v := range globalPlanet.Vertices {
 					if v.Height < minH { minH = v.Height }
 					if v.Height > maxH { maxH = v.Height }
 				}
-				fmt.Printf("SIM: Update %d, Time=%.1f My, Speed=%.0f yr/s, YearsPerUpdate=%.0f, Heights=[%.4f,%.4f], Plates=%d\n", 
-					updateCount, globalPlanet.GeologicalTime/1000000.0, globalPlanet.TimeSpeed, yearsPerUpdate, minH, maxH, len(globalPlanet.Plates))
+				
+				fmt.Printf("TIMING: SimTime=%v, Time=%.1f My, Speed=%.0f yr/s, YearsPerUpdate=%.0f, Heights=[%.4f,%.4f], Plates=%d\n", 
+					simTime, globalPlanet.GeologicalTime/1000000.0, globalPlanet.TimeSpeed, yearsPerUpdate, minH, maxH, len(globalPlanet.Plates))
 			}
 		}
 
 		// Broadcast to all clients
+		broadcastStart := time.Now()
 		broadcastMeshData()
+		broadcastTime := time.Since(broadcastStart)
+		
+		// Total frame time
+		totalTime := time.Since(frameStart)
+		if totalTime > 90*time.Millisecond {
+			fmt.Printf("SLOW FRAME: Total=%v (Sim=%v, Broadcast=%v)\n", totalTime, simTime, broadcastTime)
+		}
 	}
 }
 
 func sendMeshData(conn *websocket.Conn) {
+	clientsMutex.RLock()
+	mutex, ok := clients[conn]
+	clientsMutex.RUnlock()
+	if !ok {
+		return
+	}
+	
 	meshData := createMeshData()
+	mutex.Lock()
 	conn.WriteJSON(meshData)
+	mutex.Unlock()
 }
 
 func broadcastMeshData() {
 	meshData := createMeshData()
 	clientsMutex.RLock()
 	clientsToRemove := []*websocket.Conn{}
-	for client := range clients {
+	for client, mutex := range clients {
+		mutex.Lock()
 		err := client.WriteJSON(meshData)
+		mutex.Unlock()
 		if err != nil {
 			log.Println("WebSocket write error:", err)
 			client.Close()
