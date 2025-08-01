@@ -1,7 +1,19 @@
 package main
 
-import rl "github.com/gen2brain/raylib-go/raylib"
+import (
+	"math"
+	"net/http"
+	"github.com/gorilla/websocket"
+)
 
+// Websocket upgrader
+var upgrader = websocket.Upgrader{
+	CheckOrigin: func(r *http.Request) bool {
+		return true // Allow all origins for development
+	},
+}
+
+// Vector3 represents a 3D vector
 type Vector3 struct {
 	X, Y, Z float64
 }
@@ -15,7 +27,7 @@ func (v Vector3) Scale(s float64) Vector3 {
 }
 
 func (v Vector3) Length() float64 {
-	return sqrt(v.X*v.X + v.Y*v.Y + v.Z*v.Z)
+	return math.Sqrt(v.X*v.X + v.Y*v.Y + v.Z*v.Z)
 }
 
 func (v Vector3) Normalize() Vector3 {
@@ -26,62 +38,31 @@ func (v Vector3) Normalize() Vector3 {
 	return Vector3{v.X / length, v.Y / length, v.Z / length}
 }
 
-func (v Vector3) Dot(other Vector3) float64 {
-	return v.X*other.X + v.Y*other.Y + v.Z*other.Z
+// MeshData is sent to the frontend for rendering
+type MeshData struct {
+	Type         string        `json:"type"`
+	Vertices     [][3]float64  `json:"vertices"`
+	Indices      []int         `json:"indices"`
+	Heights      []float64     `json:"heights"`
+	PlateIDs     []int         `json:"plateIds"`
+	Temperatures []float64     `json:"temperatures"`
+	CrustalAges  []float64     `json:"crustalAges"`
+	RockTypes    []int         `json:"rockTypes"`
+	SeaLevel     float64       `json:"seaLevel"`
+	Boundaries   []BoundaryData `json:"boundaries"`
+	Time         float64       `json:"time"`
+	TimeSpeed    float64       `json:"timeSpeed"`
 }
 
-type Vertex struct {
-	Position    Vector3
-	Height      float64
-	PlateID     int
-	Temperature float64
-	Moisture    float64
-	IsCraton    bool // Stable continental core
+// BoundaryData represents a plate boundary for rendering
+type BoundaryData struct {
+	Type     string `json:"type"`
+	Vertices []int  `json:"vertices"`
+	Color    string `json:"color"`
 }
 
-type PlateType int
-
-const (
-	Continental PlateType = iota
-	Oceanic
-)
-
-type Plate struct {
-	ID           int
-	Center       Vector3
-	Velocity     Vector3
-	Type         PlateType
-	Color        rl.Color
-	Vertices     []int // Indices of vertices belonging to this plate
-	Boundaries   []PlateBoundary
+// serveHome serves the main HTML page
+func serveHome(w http.ResponseWriter, r *http.Request) {
+	http.ServeFile(w, r, "web/index.html")
 }
 
-type BoundaryType int
-
-const (
-	Convergent BoundaryType = iota
-	Divergent
-	Transform
-)
-
-type PlateBoundary struct {
-	Plate1       int
-	Plate2       int
-	Type         BoundaryType
-	EdgeVertices []int // Vertices along this boundary
-}
-
-type Planet struct {
-	Vertices       []Vertex
-	Indices        []int32
-	Plates         []Plate
-	Boundaries     []PlateBoundary
-	TimeSpeed      float64
-	GeologicalTime       float64
-	LastBoundaryUpdate   float64
-	LastVolcanismUpdate  float64
-	NeedsOwnershipUpdate bool
-	ShowWater            bool
-	Hotspots             []Hotspot
-	NeighborCache        map[int][]int // Cache vertex neighbors
-}

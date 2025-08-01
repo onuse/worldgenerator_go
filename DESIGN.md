@@ -1,105 +1,97 @@
-Of course. Here is a summary of the server-side logic and development plan formatted as a `DESIGN.md` document.
+# DESIGN.md: Voxel Planet Evolution Simulator
 
------
-
-# DESIGN.md: Project Terra 🪐
-
-This document outlines the design and development plan for a planetary simulation server. The project will be developed in Go, featuring a computation backend with graceful degradation (CUDA -\> MPS -\> CPU) and a phased development cycle that includes an initial local visualizer.
+This document outlines the architecture and design of the voxel-based planet evolution simulator.
 
 ## Core Architecture
 
-The server will be built around two main components: a **Simulation Core** and a swappable **Compute Backend**.
+The simulator is built around a voxel-based representation of a planet, enabling true 3D geological processes and material flow.
 
-1.  **Simulation Core (Go):** The main application responsible for managing the simulation state, time steps, and orchestrating updates. It holds the planet's data structure but delegates heavy calculations.
+### Key Components
 
-2.  **Compute Backend (`interface`):** To handle graceful degradation, we'll use a Go interface. The Core will call methods on this interface, unaware of the underlying implementation (GPU or CPU).
+1. **Voxel Planet (`VoxelPlanet`)**: The core data structure representing the planet as a series of spherical shells, each containing voxels in a spherical coordinate system.
 
-    ```go
-    // ComputeBackend defines the contract for heavy computation.
-    type ComputeBackend interface {
-        // Init initializes the backend with the planet's mesh data.
-        Init(vertices []Vertex) error
-        // TectonicUplift calculates mountain formation from plate pressure.
-        TectonicUplift(plates []Plate)
-        // HydraulicErosion simulates water flow and sediment transport.
-        HydraulicErosion()
-        // ... other simulation steps
-    }
-    ```
+2. **Physics Engine (`VoxelPhysics`)**: Handles all physical simulations including:
+   - Temperature diffusion and heat flow
+   - Pressure calculation
+   - Phase transitions (melting/solidification)
+   - Material properties
 
-3.  **Local Visualizer:** For initial development and debugging, the server will **not** be headless. It will use a simple Go graphics library (**Raylib-go**) to render the simulation state directly in a window. This allows for immediate visual feedback before network logic is implemented.
+3. **Advection System (`VoxelAdvection`)**: Manages material movement:
+   - Convection cell formation
+   - Buoyancy-driven flow
+   - Material transport
 
-## Data Representation
+4. **Server (`server.go`)**: WebSocket server that:
+   - Runs the simulation loop
+   - Converts voxel data to mesh format for rendering
+   - Handles client connections and speed controls
 
-The planet will be represented as an **icosphere mesh**. This avoids pole distortion and provides evenly distributed vertices, ideal for simulation. Each vertex on the mesh will hold its own state.
+5. **Web Frontend**: Three.js-based renderer that displays the planet
 
+## Voxel Structure
+
+The planet uses a spherical coordinate system with:
+- **Shells**: Exponentially-spaced from core to surface for better surface resolution
+- **Equal-area latitude bands**: Avoids pole singularities
+- **Adaptive longitude divisions**: More points near equator, fewer at poles
+
+Each voxel stores:
 ```go
-// Vertex represents a single point on the planet's surface.
-type Vertex struct {
-    Position      Vector3 // 3D coordinates
-    Height        float64 // Elevation above/below sea level
-    PlateID       int     // ID of the tectonic plate it belongs to
-    Temperature   float64
-    Moisture      float64
+type VoxelMaterial struct {
+    Type        MaterialType  // Granite, Basalt, Water, etc.
+    Density     float32      // kg/m³
+    Temperature float32      // Kelvin
+    Pressure    float32      // Pascals
+    VelR, VelTheta, VelPhi float32  // Velocity components
+    Age         float32      // Material age
+    Stress      float32      // Mechanical stress
+    Composition float32      // 0=felsic, 1=mafic
 }
 ```
 
-## Development Phases
+## Simulation Pipeline
 
-The project will be built in stages, mimicking a planet's formation.
+1. **Temperature Evolution**: Heat diffusion between voxels, surface solar heating/cooling, radioactive decay in core
+2. **Pressure Calculation**: Weight of overlying material
+3. **Phase Transitions**: Temperature/pressure-dependent melting and solidification
+4. **Convection**: Temperature-driven buoyancy forces create convection cells
+5. **Material Advection**: Movement of material based on velocity field
+6. **Surface Extraction**: Convert voxel data to triangle mesh for rendering
 
-### Phase 1: The Molten Core
+## Physics Implementation
 
-* **Objective:** Create the basic planet sphere and visualization framework.
-* **Tasks:**
-    1.  Implement icosphere generation logic.
-    2.  Set up the local visualizer with **Raylib-go**.
-    3.  Render a basic, rotating 3D icosphere.
+### Heat Diffusion
+Uses finite difference approximation of the heat equation:
+```
+∂T/∂t = α∇²T
+```
 
------
+### Convection
+Rayleigh-Bénard convection driven by temperature gradients:
+- Hot material rises (positive buoyancy)
+- Cold material sinks (negative buoyancy)
+- Critical Rayleigh number determines convection onset
 
-### Phase 2: The Crust Forms 🌋
+### Material Properties
+Each material type has physical properties:
+- Density
+- Melting point
+- Thermal conductivity
+- Specific heat capacity
+- Viscosity (temperature/pressure dependent)
 
-* **Objective:** Generate the initial tectonic plates and continental landmasses.
-* **Tasks:**
-    1.  Implement **Voronoi diagrams** on the sphere's surface to define plate boundaries.
-    2.  Assign properties to each plate (e.g., continental vs. oceanic).
-    3.  Apply a noise function (e.g., Simplex noise) to create initial, non-simulated terrain.
+## Performance Optimizations
 
------
+- **Sparse Active Cells**: Only update voxels that need computation
+- **Hierarchical Time Steps**: Different update rates for different processes
+- **Simplified Surface Mesh**: Generate mesh only from visible surface voxels
+- **Concurrent Physics**: Simulation runs in separate goroutine from server
 
-### Phase 3: The Earth Moves
+## Future Enhancements
 
-* **Objective:** Simulate long-term tectonic movement to create realistic mountain ranges.
-* **Tasks:**
-    1.  Implement the `ComputeBackend` interface with a basic **CPU** version first.
-    2.  Simulate plate drift and create uplift (mountains) at convergent boundaries.
-    3.  Begin implementing the **CUDA** and **MPS** backends for GPU acceleration of these calculations.
-
------
-
-### Phase 4: The Rains Come 💧
-
-* **Objective:** Simulate a basic climate and hydraulic erosion to create natural-looking landforms.
-* **Tasks:**
-    1.  Implement a simple climate model (temperature by latitude/altitude, prevailing winds).
-    2.  Simulate rainfall and create rain shadows.
-    3.  Implement a hydraulic erosion algorithm, heavily leveraging the `ComputeBackend` for performance. This step will transform the blocky mountains into realistic, eroded ranges.
-
------
-
-### Phase 5: The Great Divide 🌐
-
-* **Objective:** Decouple the renderer into a separate client application.
-* **Tasks:**
-    1.  Remove the local **Raylib-go** visualizer from the server.
-    2.  Implement a network layer (e.g., WebSockets or gRPC) to stream simplified world state.
-    3.  The server is now a true headless application. A separate rendering client can be built in any technology (Unity, Godot, etc.) to connect to it.
-
-## Technology Stack Summary
-
-* **Language:** Go
-* **GPU Backend (NVIDIA):** CUDA (via `gocuda` bindings)
-* **GPU Backend (Apple):** Metal Performance Shaders (MPS)
-* **CPU Fallback:** Standard Go with multi-threading (`goroutines`)
-* **Initial Prototyping Renderer:** Raylib-go
+See `VOXEL_ROADMAP.md` for detailed development phases including:
+- GPU acceleration for physics calculations
+- Adaptive voxel resolution (octree subdivision)
+- Advanced plate tectonics from emergent convection
+- Surface processes (erosion, sedimentation)
+- Climate and biosphere simulation

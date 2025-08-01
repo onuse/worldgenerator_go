@@ -1,96 +1,57 @@
-# World Generator - Planet Evolution Simulator
+# World Generator - Voxel Planet Evolution Simulator
 
-A real-time planet evolution simulator with realistic tectonic plate simulation, written in Go with GPU acceleration.
+A voxel-based planet evolution simulator written in Go, featuring realistic geological processes, mantle convection, and plate tectonics.
 
 ## Features
 
-- **Realistic Plate Tectonics**: Free-moving tectonic plates with proper subduction, collision, and rifting
-- **GPU Acceleration**: Metal (macOS) and OpenCL backends for high-performance simulation
-- **Real-time Visualization**: Web-based 3D rendering with Three.js
-- **Advanced Geological Processes**: Volcanism, erosion, sedimentation, and isostatic adjustment
-- **Configurable Resolution**: Support for different mesh resolutions via settings.json
-- **Time Controls**: Simulate from 1 year/second to 100 million years/second
+- **Voxel-based architecture**: True 3D planet structure with material flow
+- **Temperature dynamics**: Heat diffusion, solar heating, and radioactive decay
+- **Material physics**: Phase transitions, pressure calculation, and density variations
+- **Mantle convection**: Temperature-driven convection cells that drive plate motion
+- **Real-time visualization**: Web-based 3D renderer using Three.js
+- **Time controls**: Simulate from years to millions of years per second
 
-## Requirements
+## Architecture
 
-- Go 1.19 or higher
-- macOS (for Metal backend) or system with OpenCL support
-- Modern web browser with WebGL support
+The simulator uses a spherical voxel grid with exponentially-spaced shells from core to surface. Each voxel tracks:
+- Material type (granite, basalt, water, magma, etc.)
+- Temperature and pressure
+- Density and velocity
+- Age and composition
 
-## Quick Start
+## Getting Started
 
-1. Clone the repository
-2. Configure settings (optional): Edit `settings.json`
-3. Build and run:
-   ```bash
-   go build .
-   ./worldgenerator
-   ```
-4. Open http://localhost:8080 in your browser
+1. Install Go 1.19 or later
+2. Clone the repository
+3. Run `go build .`
+4. Start the server: `./worldgenerator`
+5. Open http://localhost:8080 in your browser
 
 ## Configuration
 
-Edit `settings.json` to configure:
-- `icosphereLevel`: Mesh resolution (5-8, higher = more detail)
-- `port`: Server port (default: 8080)
+Edit `settings.json` to adjust:
+- `icosphereLevel`: Planet detail level (default: 7)
 - `updateIntervalMs`: Simulation update rate
+- `broadcastIntervalMs`: Frontend update rate
+- `port`: Server port
 
-See [README_SETTINGS.md](README_SETTINGS.md) for details.
+## Development Roadmap
 
-## Project Structure
+See `VOXEL_ROADMAP.md` for the complete development plan, including:
+- Phase 1: Foundation ✅
+- Phase 2: Material Physics ✅
+- Phase 3: Mantle Convection (in progress)
+- Phase 4: Plate Tectonics
+- Phase 5: Surface Processes
+- And more...
 
-### Core Files
-- `main.go` - Application entry point
-- `types.go` - Core data structures
-- `server.go` - WebSocket server and client communication
-- `settings.go` - Configuration management
+## Technical Details
 
-### Simulation
-- `geometry.go` - Icosphere mesh generation
-- `plates.go` - Tectonic plate generation and boundaries
-- `tectonics.go` - Main tectonic simulation loop
-- `realistic_plates_simple.go` - Realistic plate movement
-- `continents.go` - Continent and terrain generation
-- `volcanism.go` - Volcanic activity simulation
-- `geological_processes.go` - Advanced geological features
-- `erosion.go` - Erosion and weathering
-- `smoothing.go` - Height smoothing and utilities
-- `adaptive_time.go` - Adaptive timestep calculations
+- **Backend**: Go with goroutines for concurrent physics simulation
+- **Frontend**: JavaScript/Three.js for 3D rendering
+- **Communication**: WebSocket for real-time updates
+- **Physics**: Finite difference methods for heat diffusion and material advection
 
-### GPU Backends
-- `compute_backend.go` - GPU backend interface
-- `metal_simple.go` - Metal (macOS) implementation
-- `metal_stub.go` - Stub for non-macOS systems
-- `opencl_compute.go` - OpenCL implementation
-- `opencl_stub.go` - Stub for systems without OpenCL
-- `shaders/` - GPU compute shaders
+## License
 
-### Web Interface
-- `web/index.html` - Main UI
-- `web/static/terra.js` - 3D rendering and controls
-
-## Controls
-
-### Simulation Speed
-- Click speed buttons to control simulation rate
-- Current speed is highlighted and displayed
-
-### View Controls
-- **Mouse drag**: Rotate planet
-- **Mouse wheel**: Zoom in/out
-- **Water toggle**: Show/hide ocean
-- **Heightmap mode**: Visualize elevation
-- **Show Plates**: Color-code tectonic plates
-- **Show Boundaries**: Display plate boundaries
-
-## Performance
-
-With GPU acceleration on Apple Silicon:
-- Level 6 (40k vertices): 2-5ms per frame
-- Level 7 (160k vertices): 10-20ms per frame
-- Level 8 (650k vertices): 50-100ms per frame
-
-## Development Notes
-
-- See [DESIGN.md](DESIGN.md) for architecture details
-- See [gpu_optimization_notes.md](gpu_optimization_notes.md) for GPU optimization opportunities
+MIT
