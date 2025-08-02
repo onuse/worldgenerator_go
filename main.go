@@ -18,7 +18,6 @@ func main() {
 		gpuType       = flag.String("gpu", "cpu", "GPU compute backend (metal, opencl, cuda, cpu)")
 		width         = flag.Int("width", 1280, "Window width")
 		height        = flag.Int("height", 720, "Window height")
-		debugMode     = flag.Bool("debug", false, "Run diagnostic without rendering")
 	)
 	flag.Parse()
 	
@@ -28,17 +27,8 @@ func main() {
 	fmt.Printf("GPU backend: %s\n", *gpuType)
 	fmt.Printf("Window: %dx%d\n", *width, *height)
 	
-	// Debug continents
-	// DebugContinentalness()
-	
 	// Create voxel planet
 	planet := CreateVoxelPlanet(*radius, *shellCount)
-	
-	// Run debug mode if requested
-	if *debugMode {
-		DebugVoxelData(planet)
-		return
-	}
 	
 	// Initialize GPU compute
 	var gpuCompute GPUCompute
