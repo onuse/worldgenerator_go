@@ -22,7 +22,7 @@ type VoxelTextureData struct {
 func NewVoxelTextureData(maxShells int) *VoxelTextureData {
 	vtd := &VoxelTextureData{
 		maxShells: int32(maxShells),
-		textureSize: 512, // Balance between quality and performance
+		textureSize: 360, // Match voxel grid resolution to avoid aliasing
 	}
 	
 	// Create textures
@@ -145,48 +145,15 @@ func (vtd *VoxelTextureData) UpdateFromPlanet(planet *VoxelPlanet) {
 				
 				idx := texY*int(vtd.textureSize) + texX
 				
-				// For surface shell, recreate continent logic
-				if shellIdx == len(planet.Shells)-2 {
-					// Simple continent generation - must match voxel_planet.go logic
-					isLand := false
-					
-					// Eurasia
-					if lat > 20 && lat < 75 && lon > -10 && lon < 140 {
-						isLand = true
-					}
-					// Africa  
-					if lat > -35 && lat < 35 && lon > -20 && lon < 50 {
-						isLand = true
-					}
-					// Americas
-					if lon > -170 && lon < -30 {
-						if lat > -55 && lat < 70 {
-							isLand = true
-						}
-					}
-					// Australia
-					if lat > -40 && lat < -10 && lon > 110 && lon < 155 {
-						isLand = true
-					}
-					
-					if isLand {
-						materialData[idx] = float32(MatGranite)
-					} else {
-						materialData[idx] = float32(MatWater)
-					}
-					tempData[idx] = 288.15 - float32(math.Abs(lat)*0.5)
+				// Always sample from voxel data for consistency
+				voxel := sampleVoxelAtLocation(&shell, lat, lon)
+				materialData[idx] = float32(voxel.Type)
+				if voxel.Type != MatAir {
 					nonAirCount++
-				} else {
-					// For non-surface shells, sample from voxel data
-					voxel := sampleVoxelAtLocation(&shell, lat, lon)
-					materialData[idx] = float32(voxel.Type)
-					if voxel.Type != MatAir {
-						nonAirCount++
-					}
-					tempData[idx] = voxel.Temperature
-					velData[idx*2] = voxel.VelTheta
-					velData[idx*2+1] = voxel.VelPhi
 				}
+				tempData[idx] = voxel.Temperature
+				velData[idx*2] = voxel.VelTheta
+				velData[idx*2+1] = voxel.VelPhi
 			}
 		}
 		

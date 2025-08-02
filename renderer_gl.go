@@ -18,8 +18,17 @@ type VoxelRenderer struct {
 	// Shader programs
 	rayMarchProgram uint32
 	
+	// Test mode (can be removed after debugging)
+	currentTest int
+	
 	// Vertex array for fullscreen quad
 	quadVAO uint32
+	
+	// Sphere geometry for test rendering
+	sphereVAO        uint32
+	sphereVBO        uint32
+	sphereEBO        uint32
+	sphereIndexCount int32
 	
 	// Shared GPU buffers
 	voxelSSBO      uint32  // Shared with Metal compute
@@ -101,23 +110,24 @@ func NewVoxelRenderer(width, height int) (*VoxelRenderer, error) {
 	gl.Enable(gl.CULL_FACE)
 	gl.ClearColor(0.05, 0.05, 0.1, 1.0)
 	
-	// Create shader program - use splat rendering for smoother appearance
-	program, err := CompileSplatShaders()
+	// Create shader program - ray marching works perfectly now!
+	program, err := CompileVoxelRayMarchShaders()
 	if err != nil {
-		// Fallback to ray marching if splat fails
-		fmt.Println("Splat shaders failed, falling back to ray marching")
-		program, err = CompileVoxelRayMarchShaders()
-		if err != nil {
-			return nil, fmt.Errorf("failed to compile shaders: %v", err)
-		}
+		return nil, fmt.Errorf("failed to compile ray march shaders: %v", err)
 	}
 	r.rayMarchProgram = program
 	
 	// Create fullscreen quad for ray marching
 	r.createQuad()
 	
+	// Create sphere for test rendering
+	r.createSphere()
+	
 	// Create voxel texture storage
 	r.voxelTextures = NewVoxelTextureData(30) // Support up to 30 shells
+	
+	// Test system can be enabled if needed for debugging
+	// r.CreateTestRenderers()
 	
 	// Setup matrices
 	r.updateMatrices()

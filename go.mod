@@ -1,6 +1,6 @@
 module worldgenerator
 
-go 1.21
+go 1.24.5
 
 require (
 	github.com/gen2brain/raylib-go/raylib v0.55.1

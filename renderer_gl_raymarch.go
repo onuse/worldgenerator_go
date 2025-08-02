@@ -134,12 +134,13 @@ vec4 sampleVoxelData(vec3 pos) {
     if (shell < 0) return vec4(0.0);
     
     // Convert to spherical coordinates
-    float theta = acos(clamp(pos.z / r, -1.0, 1.0)); // 0 to PI
-    float phi = atan(pos.y, pos.x); // -PI to PI
+    vec3 normalized = normalize(pos);
+    float lat = asin(clamp(normalized.z, -1.0, 1.0)); // -PI/2 to PI/2
+    float lon = atan(normalized.y, normalized.x); // -PI to PI
     
-    // Convert to texture coordinates
-    float u = (phi + 3.14159265) / (2.0 * 3.14159265); // 0 to 1
-    float v = theta / 3.14159265; // 0 to 1
+    // Convert to texture coordinates matching the texture generation
+    float u = (lon + 3.14159265) / (2.0 * 3.14159265); // 0 to 1
+    float v = (lat + 1.57079633) / 3.14159265; // 0 to 1, where v=0 is south pole
     
     // Sample with proper filtering
     vec3 texCoord = vec3(u, v, float(shell));
@@ -185,8 +186,9 @@ vec4 rayMarchVolume(vec3 ro, vec3 rd) {
             vec3 hitPos = ro + rd * t0_surface;
             vec3 normal = normalize(hitPos);
             
-            // Sample surface voxel data with noise-based smoothing
-            vec4 voxelData = sampleVoxelData(hitPos);
+            // Sample slightly inside the surface to avoid shell boundary issues
+            vec3 samplePos = hitPos * 0.999; // Move 0.1% inward
+            vec4 voxelData = sampleVoxelData(samplePos);
             
             // Add procedural noise to break up the grid pattern
             float noiseScale = 50.0;
@@ -204,20 +206,8 @@ vec4 rayMarchVolume(vec3 ro, vec3 rd) {
             MaterialProps props = getMaterialProps(matType);
             vec3 color = props.color;
             
-            // Smooth transitions between materials with noise
-            if (matType == 1 || matType == 3) { // Water or Land
-                float threshold = 2.0 + coastNoise; // Add noise to coastline
-                float blend = smoothstep(threshold - 0.8, threshold + 0.8, matTypeFloat);
-                vec3 waterColor = getMaterialProps(1).color;
-                vec3 landColor = getMaterialProps(3).color;
-                color = mix(waterColor, landColor, blend);
-                
-                // Add subtle color variation based on noise
-                color = color * (0.9 + noise * 0.1);
-            } else if (matType == 2) { // Basalt
-                // Add some variation to basalt areas too
-                color = color * (0.85 + noise * 0.15);
-            }
+            // Keep colors pure without noise variation to avoid dithering
+            // The noise multiplication was contributing to the dithering pattern
             
             // Bright lighting
             vec3 lightDir = normalize(vec3(1.0, 1.0, 0.5));
@@ -269,14 +259,8 @@ vec4 rayMarchVolume(vec3 ro, vec3 rd) {
         // Get material properties with smooth blending
         MaterialProps props = getMaterialProps(matType);
         
-        // Smooth material blending based on fractional part
-        float matFrac = fract(voxelData.x);
-        if (matType > 0 && matType < 8 && matFrac > 0.2 && matFrac < 0.8) {
-            // Blend between adjacent materials
-            MaterialProps props2 = getMaterialProps(matType + 1);
-            float blend = smoothstep(0.2, 0.8, matFrac);
-            props.color = mix(props.color, props2.color, blend);
-        }
+        // FIXED: Removed fractional material blending to eliminate dithering
+        // Just use the discrete material type without blending
         
         // Visualization modes
         vec3 color = props.color;
