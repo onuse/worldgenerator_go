@@ -6,6 +6,12 @@ import (
 	"log"
 	"runtime"
 	"time"
+	
+	"worldgenerator/core"
+	"worldgenerator/gpu"
+	"worldgenerator/gpu/opencl"
+	"worldgenerator/physics"
+	"worldgenerator/rendering/opengl"
 )
 
 func main() {
@@ -29,7 +35,7 @@ func main() {
 	fmt.Printf("Window: %dx%d\n", *width, *height)
 	
 	// Create voxel planet
-	planet := CreateVoxelPlanet(*radius, *shellCount)
+	planet := core.CreateVoxelPlanet(*radius, *shellCount)
 	
 	// Count voxels
 	totalVoxels := 0
@@ -42,7 +48,7 @@ func main() {
 	fmt.Printf("Data size: %.1f MB per frame\n", float64(totalVoxels*64)/(1024*1024))
 	
 	// Initialize GPU compute
-	var gpuCompute GPUCompute
+	var gpuCompute gpu.GPUCompute
 	var err error
 	
 	switch *gpuType {
@@ -50,12 +56,14 @@ func main() {
 		if runtime.GOOS != "darwin" {
 			log.Fatal("Metal is only available on macOS")
 		}
-		gpuCompute, err = NewMetalCompute(planet)
+		// Metal compute
+		mc, err := gpu.NewMetalCompute(planet)
 		if err != nil {
 			log.Fatalf("Failed to initialize Metal compute: %v", err)
 		}
+		gpuCompute = mc
 	case "opencl":
-		gpuCompute, err = NewOpenCLCompute(planet)
+		gpuCompute, err = opencl.NewOpenCLCompute(planet)
 		if err != nil {
 			log.Fatalf("Failed to initialize OpenCL compute: %v", err)
 		}
@@ -63,7 +71,7 @@ func main() {
 		log.Fatal("CUDA support not yet implemented")
 	case "cpu", "compute":
 		// For compute shaders, we still need a fallback CPU compute for initialization
-		gpuCompute, err = NewCPUCompute(planet)
+		gpuCompute, err = gpu.NewCPUCompute(planet)
 		if err != nil {
 			log.Fatalf("Failed to initialize CPU compute: %v", err)
 		}
@@ -73,47 +81,51 @@ func main() {
 	defer gpuCompute.Cleanup()
 	
 	// Create native OpenGL renderer
-	renderer, err := NewVoxelRenderer(*width, *height)
+	renderer, err := opengl.NewVoxelRenderer(*width, *height)
 	if err != nil {
 		log.Fatalf("Failed to create renderer: %v", err)
 	}
 	defer renderer.Terminate()
 	
 	// Set planet reference for mouse picking
-	renderer.planetRef = planet
+	renderer.PlanetRef = planet
 	
 	// Try to create GPU compute physics (OpenGL 4.3 compute shaders)
-	var computePhysics *ComputePhysics
-	useGPUPhysics := false
-	if *gpuType == "compute" || (*gpuType == "cpu" && renderer.HasComputeShaderSupport()) {
-		cp, err := NewComputePhysics(planet)
-		if err == nil {
-			computePhysics = cp
-			useGPUPhysics = true
-			defer computePhysics.Release()
-			fmt.Println("✅ Using GPU compute shaders for physics")
+	// TODO: Implement ComputePhysics when needed
+	// var computePhysics *physics.ComputePhysics
+	// useGPUPhysics := false
+	// if *gpuType == "compute" || (*gpuType == "cpu" && renderer.HasComputeShaderSupport()) {
+	// 	cp, err := physics.NewComputePhysics(planet)
+	// 	if err == nil {
+	// 		computePhysics = cp
+	// 		useGPUPhysics = true
+	// 		defer computePhysics.Release()
+	// 		fmt.Println("✅ Using GPU compute shaders for physics")
 			
-			// Initialize plate tectonics if available
-			if planet.physics != nil && planet.physics.plates != nil {
-				if err := computePhysics.InitializePlateTectonics(planet.physics.plates); err == nil {
-					fmt.Println("✅ GPU plate tectonics initialized")
-				} else {
-					fmt.Printf("⚠️  Plate tectonics not available: %v\n", err)
-				}
-			}
-		} else {
-			fmt.Printf("⚠️  Compute shader physics not available: %v\n", err)
-		}
-	}
+	// 		// Initialize plate tectonics if available
+	// 		// TODO: Fix this when physics package is properly integrated
+	// 		// if planet.Physics != nil && planet.Physics.plates != nil {
+	// 		if false {
+	// 			// if err := computePhysics.InitializePlateTectonics(planet.Physics.plates); err == nil {
+	// 			if false {
+	// 				fmt.Println("✅ GPU plate tectonics initialized")
+	// 			} else {
+	// 				fmt.Printf("⚠️  Plate tectonics not available: %v\n", err)
+	// 			}
+	// 		}
+	// 	} else {
+	// 		fmt.Printf("⚠️  Compute shader physics not available: %v\n", err)
+	// 	}
+	// }
 	
 	// Try to create optimized GPU buffer manager
-	var gpuBufferMgr *WindowsGPUBufferManager
+	var gpuBufferMgr *gpu.WindowsGPUBufferManager
 	if runtime.GOOS == "windows" || runtime.GOOS == "linux" {
-		if mgr, err := NewWindowsGPUBufferManager(planet); err == nil {
+		if mgr, err := gpu.NewWindowsGPUBufferManager(planet); err == nil {
 			gpuBufferMgr = mgr
 			defer gpuBufferMgr.Release()
 			fmt.Println("✅ Using optimized GPU buffer sharing")
-			if mgr.usePersistent {
+			if mgr.UsePersistent {
 				fmt.Println("✅ Using persistent mapped buffers (zero-copy)")
 			} else {
 				fmt.Println("⚠️  Using standard buffers (requires copy)")
@@ -124,9 +136,9 @@ func main() {
 	}
 	
 	// Create shared buffer manager (fallback)
-	var sharedBuffers *SharedGPUBuffers
+	var sharedBuffers *gpu.SharedGPUBuffers
 	if gpuBufferMgr == nil {
-		sharedBuffers = NewSharedGPUBuffers(planet)
+		sharedBuffers = gpu.NewSharedGPUBuffers(planet)
 		sharedBuffers.UpdateFromPlanet(planet)
 		// Create OpenGL buffers
 		renderer.CreateBuffers(sharedBuffers)
@@ -146,6 +158,10 @@ func main() {
 	totalFrameCount := 0 // Never reset this one
 	lastFPSTime := time.Now()
 	
+	// Create threaded physics engine
+	physicsEngine := physics.NewThreadedPhysicsInterface(planet, gpuCompute, simSpeed)
+	defer physicsEngine.Stop()
+	
 	fmt.Println("\nControls:")
 	fmt.Println("  1-4: Change visualization (Material/Temperature/Velocity/Age)")
 	fmt.Println("  X/Y/Z: Toggle cross-section view")
@@ -163,28 +179,13 @@ func main() {
 		dt := now.Sub(lastTime).Seconds()
 		lastTime = now
 		
-		// Update simulation only occasionally
+		// Check if physics thread has new data
 		physicsUpdated := false
-		if totalFrameCount > 0 && totalFrameCount % 300 == 0 { // Update physics every 300 frames, skip frame 0
-			if useGPUPhysics && computePhysics != nil && gpuBufferMgr != nil {
-				// Run physics on GPU using compute shaders
-				gpuBufferMgr.SyncToGPU() // Ensure GPU has latest data
-				computePhysics.RunPhysicsStep(float32(dt*simSpeed*300), float32(*radius), 9.8)
-				// Sync back to CPU for visualization and plate updates
-				gpuBufferMgr.UpdateToPlanet(planet)
-				
-				// Update plate boundaries after GPU physics modified velocities
-				if planet.physics != nil && planet.physics.plates != nil {
-					// Re-identify boundaries since voxels may have moved
-					for _, plate := range planet.physics.plates.Plates {
-						planet.physics.plates.identifyPlateBoundaries(plate)
-					}
-				}
-			} else {
-				// Fallback to CPU physics
-				UpdateVoxelPhysicsWrapper(planet, dt*simSpeed*300, gpuCompute)
-			}
+		if updatedPlanet, hasUpdate := physicsEngine.Update(); hasUpdate {
+			// Use the updated planet data from physics thread
+			planet = updatedPlanet
 			physicsUpdated = true
+			renderer.PlanetRef = planet // Update renderer's reference
 		}
 		planet.Time += dt * simSpeed
 		
@@ -192,23 +193,33 @@ func main() {
 		if physicsUpdated {
 			if gpuBufferMgr != nil {
 				// Only include plate data when in plate visualization mode
-				if renderer.renderMode == 4 && planet.physics != nil && planet.physics.plates != nil {
-					gpuBufferMgr.UpdateFromPlanetWithPlates(planet, planet.physics.plates)
-				} else {
-					gpuBufferMgr.UpdateFromPlanet(planet)
-				}
+				// TODO: Fix this when physics package is properly integrated
+				// if renderer.RenderMode == 4 {
+				// 	if vp, ok := planet.Physics.(*physics.VoxelPhysics); ok && vp.plates != nil {
+				// 		gpuBufferMgr.UpdateFromPlanetWithPlates(planet, vp.plates)
+				// 	} else {
+				// 		gpuBufferMgr.UpdateFromPlanet(planet)
+				// 	}
+				// } else {
+				gpuBufferMgr.UpdateFromPlanet(planet)
+				// }
 			} else {
 				// Fallback path - copy through shared buffers
-				if renderer.renderMode == 4 && planet.physics != nil && planet.physics.plates != nil {
-					UpdateSharedBuffersWithPlates(sharedBuffers, planet, planet.physics.plates)
-				} else {
-					sharedBuffers.UpdateFromPlanet(planet)
-				}
+				// TODO: Fix this when physics package is properly integrated
+				// if renderer.RenderMode == 4 {
+				// 	if vp, ok := planet.Physics.(*physics.VoxelPhysics); ok && vp.plates != nil {
+				// 		simulation.UpdateSharedBuffersWithPlates(sharedBuffers, planet, vp.plates)
+				// 	} else {
+				// 		sharedBuffers.UpdateFromPlanet(planet)
+				// 	}
+				// } else {
+				sharedBuffers.UpdateFromPlanet(planet)
+				// }
 				renderer.UpdateBuffers(sharedBuffers)
 			}
 			
 			// Also update voxel textures (skip if using SSBO or optimized buffers)
-			if gpuBufferMgr == nil && !renderer.useSSBO {
+			if gpuBufferMgr == nil && !renderer.UseSSBO {
 				renderer.UpdateVoxelTextures(planet)
 			}
 		}
@@ -220,11 +231,22 @@ func main() {
 		frameCount++
 		totalFrameCount++
 		
-		// Print FPS counter less frequently to avoid hiccups
-		if !*quiet && now.Sub(lastFPSTime).Seconds() >= 5.0 { // Every 5 seconds instead of 1
+		// Update stats overlay and console output
+		if now.Sub(lastFPSTime).Seconds() >= 0.5 { // Update every 0.5 seconds
 			fps := float64(frameCount) / now.Sub(lastFPSTime).Seconds()
-			// Simple one-line output to minimize console overhead
-			fmt.Printf("\rFPS: %.1f | Sim Time: %.1f My                    ", fps, planet.Time/1000000)
+			renderer.UpdateStats(fps)
+			
+			// Also print to console if not quiet
+			if !*quiet {
+				// Calculate zoom level
+				cameraDistance := renderer.GetCameraDistance()
+				zoomLevel := float64(*radius) * 3.0 / float64(cameraDistance)
+				// Get physics performance
+				physicsTime := physicsEngine.GetPhysicsFrameTime() * 1000 // Convert to ms
+				// Output with zoom info
+				fmt.Printf("\rFPS: %.1f | Physics: %.1fms | Zoom: %.3f | Distance: %.0f km | Sim Time: %.1f My    ", 
+					fps, physicsTime, zoomLevel, cameraDistance/1000.0, planet.Time/1000000)
+			}
 			frameCount = 0
 			lastFPSTime = now
 		}
