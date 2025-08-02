@@ -93,6 +93,9 @@ type VoxelPlanet struct {
 	// Visualization cache
 	SurfaceMesh *TriangleMesh // Extracted surface for rendering
 	MeshDirty   bool          // Needs remeshing
+	
+	// Physics subsystems (created on demand)
+	physics *VoxelPhysics
 }
 
 // TriangleMesh for rendering

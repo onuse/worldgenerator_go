@@ -17,6 +17,7 @@ type VoxelPhysics struct {
 	// Subsystems
 	advection *VoxelAdvection
 	mechanics *VoxelMechanics
+	plates    *PlateManager
 	
 	// GPU acceleration
 	gpuCompute *MetalCompute
@@ -38,9 +39,14 @@ func NewVoxelPhysics(planet *VoxelPlanet) *VoxelPhysics {
 	// Create subsystems
 	vp.advection = NewVoxelAdvection(planet, vp)
 	vp.mechanics = NewVoxelMechanics(planet, vp)
+	vp.plates = NewPlateManager(planet)
 	
 	// Initialize convection patterns
 	vp.advection.InitializeConvectionCells()
+	
+	// Identify initial plates
+	vp.plates.IdentifyPlates()
+	fmt.Printf("✅ Identified %d tectonic plates\n", len(vp.plates.Plates))
 	
 	// Try to initialize GPU acceleration
 	if gpuCompute, err := NewMetalCompute(planet); err == nil {

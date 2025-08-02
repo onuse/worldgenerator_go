@@ -17,6 +17,15 @@ type SphericalShellMetadata struct {
 	VoxelOffset  int32
 }
 
+// ExtendedShellMetadata includes longitude counts for proper voxel indexing
+type ExtendedShellMetadata struct {
+	InnerRadius  float32
+	OuterRadius  float32
+	LatBands     int32
+	VoxelOffset  int32
+	LonCounts    [360]int32  // Max 360 latitude bands
+}
+
 // NewSharedGPUBuffers creates a buffer manager
 func NewSharedGPUBuffers(planet *VoxelPlanet) *SharedGPUBuffers {
 	// Count total voxels

@@ -2,7 +2,7 @@ package main
 
 import (
 	"fmt"
-	"github.com/go-gl/gl/v4.1-core/gl"
+	"github.com/go-gl/gl/v4.3-core/gl"
 )
 
 // voxelRayMarchVertexShader remains the same - fullscreen quad
@@ -272,6 +272,16 @@ vec4 rayMarchVolume(vec3 ro, vec3 rd) {
             float vel = length(voxelData.zw) * 1e9; // Convert to cm/year
             color = mix(vec3(0.0, 0.0, 0.5), vec3(1.0, 1.0, 0.0), clamp(vel / 10.0, 0.0, 1.0));
             props.opacity = 0.1;
+        } else if (renderMode == 4) { // Plates - use material type as a proxy for now
+            // Without plate data in textures, show different colors for rock types
+            if (matType == 2 || matType == 3) { // Basalt or Granite
+                float pseudoPlate = float(matType + int(pos.x * 10.0) + int(pos.z * 10.0)) * 137.5;
+                float hue = mod(pseudoPlate, 360.0) / 360.0;
+                vec3 hsv = vec3(hue, 0.7, 0.8);
+                vec4 K = vec4(1.0, 2.0 / 3.0, 1.0 / 3.0, 3.0);
+                vec3 p = abs(fract(hsv.xxx + K.xyz) * 6.0 - K.www);
+                color = hsv.z * mix(K.xxx, clamp(p - K.xxx, 0.0, 1.0), hsv.y);
+            }
         }
         
         // Enhanced lighting with camera-relative light

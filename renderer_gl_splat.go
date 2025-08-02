@@ -2,7 +2,7 @@ package main
 
 import (
 	"fmt"
-	"github.com/go-gl/gl/v4.1-core/gl"
+	"github.com/go-gl/gl/v4.3-core/gl"
 )
 
 // Splat-based rendering shader that treats each voxel as a smooth sphere

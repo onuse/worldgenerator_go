@@ -10,6 +10,9 @@ type GPUVoxelMaterial struct {
 	VelPhi      float32
 	VelR        float32
 	Age         float32
+	PlateID     int32   // Which plate this voxel belongs to
+	IsBoundary  int32   // 1 if on plate boundary, 0 otherwise
+	_padding    [2]int32 // Ensure 16-byte alignment
 }
 
 // ConvertToGPUVoxel converts a VoxelMaterial to GPU format

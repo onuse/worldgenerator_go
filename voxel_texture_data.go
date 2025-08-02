@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"math"
 	"unsafe"
-	"github.com/go-gl/gl/v4.1-core/gl"
+	"github.com/go-gl/gl/v4.3-core/gl"
 )
 
 // VoxelTextureData manages voxel data as 3D textures for GPU access
@@ -108,6 +108,7 @@ func sampleVoxelAtLocation(shell *SphericalShell, lat, lon float64) VoxelMateria
 }
 
 // UpdateFromPlanet updates textures with planet voxel data
+
 func (vtd *VoxelTextureData) UpdateFromPlanet(planet *VoxelPlanet) {
 	// Prepare data arrays
 	materialData := make([]float32, vtd.textureSize*vtd.textureSize)

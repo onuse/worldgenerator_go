@@ -6,7 +6,7 @@ import (
 	"runtime"
 	"unsafe"
 
-	"github.com/go-gl/gl/v4.1-core/gl"
+	"github.com/go-gl/gl/v4.3-core/gl"
 	"github.com/go-gl/glfw/v3.3/glfw"
 	"github.com/go-gl/mathgl/mgl32"
 )
@@ -17,9 +17,13 @@ type VoxelRenderer struct {
 	
 	// Shader programs
 	rayMarchProgram uint32
+	ssboProgram     uint32  // SSBO-based ray marching
+	volumeProgram   uint32  // True volume ray marching
 	
 	// Test mode (can be removed after debugging)
 	currentTest int
+	useSSBO     bool    // Use SSBO instead of textures
+	useVolume   bool    // Use volume rendering instead of surface
 	
 	// Vertex array for fullscreen quad
 	quadVAO uint32
@@ -33,6 +37,7 @@ type VoxelRenderer struct {
 	// Shared GPU buffers
 	voxelSSBO      uint32  // Shared with Metal compute
 	shellSSBO      uint32  // Shell metadata
+	lonCountSSBO   uint32  // Longitude counts per latitude band
 	
 	// Voxel texture data
 	voxelTextures  *VoxelTextureData
@@ -48,10 +53,21 @@ type VoxelRenderer struct {
 	
 	// Render settings
 	width, height    int
-	renderMode       int32  // 0=material, 1=temperature, 2=velocity, 3=age
+	renderMode       int32  // 0=material, 1=temperature, 2=velocity, 3=age, 4=plates
 	crossSection     bool
 	crossSectionAxis int32  // 0=X, 1=Y, 2=Z
 	crossSectionPos  float32
+	
+	// Plate visualization
+	showPlates       bool
+	selectedPlateID  int
+	highlightBoundaries bool
+	
+	// Volume rendering parameters
+	opacityScale     float32
+	stepSize         float32
+	maxStepsVolume   int32
+	densityThreshold float32
 	
 	// Mouse state for camera control
 	mouseDown        bool
@@ -59,6 +75,9 @@ type VoxelRenderer struct {
 	lastMouseY       float64
 	cameraRotationX  float32
 	cameraRotationY  float32
+	
+	// Planet reference for picking
+	planetRef        *VoxelPlanet
 }
 
 // NewVoxelRenderer creates a native OpenGL voxel renderer
@@ -73,7 +92,7 @@ func NewVoxelRenderer(width, height int) (*VoxelRenderer, error) {
 	// Configure OpenGL context
 	glfw.WindowHint(glfw.Resizable, glfw.True)
 	glfw.WindowHint(glfw.ContextVersionMajor, 4)
-	glfw.WindowHint(glfw.ContextVersionMinor, 1)
+	glfw.WindowHint(glfw.ContextVersionMinor, 3)
 	glfw.WindowHint(glfw.OpenGLProfile, glfw.OpenGLCoreProfile)
 	glfw.WindowHint(glfw.OpenGLForwardCompatible, glfw.True)
 	
@@ -84,6 +103,9 @@ func NewVoxelRenderer(width, height int) (*VoxelRenderer, error) {
 	}
 	
 	window.MakeContextCurrent()
+	
+	// Disable vsync for accurate performance measurement
+	glfw.SwapInterval(0)
 	
 	// Initialize OpenGL
 	if err := gl.Init(); err != nil {
@@ -103,6 +125,11 @@ func NewVoxelRenderer(width, height int) (*VoxelRenderer, error) {
 		cameraPos:    mgl32.Vec3{0, 0, float32(6371000 * 3)}, // 3x planet radius
 		cameraRotationX: 0,
 		cameraRotationY: 0,
+		// Volume rendering defaults
+		opacityScale:     1.0,
+		stepSize:         1.0,
+		maxStepsVolume:   400,
+		densityThreshold: 0.0,
 	}
 	
 	// Setup OpenGL state
@@ -116,6 +143,28 @@ func NewVoxelRenderer(width, height int) (*VoxelRenderer, error) {
 		return nil, fmt.Errorf("failed to compile ray march shaders: %v", err)
 	}
 	r.rayMarchProgram = program
+	
+	// Try to create SSBO-based shader (optional)
+	ssboProgram, err := CreateSSBOProgram()
+	if err != nil {
+		fmt.Printf("Warning: Failed to create SSBO shader (OpenGL 4.3+ required): %v\n", err)
+		r.useSSBO = false
+	} else {
+		r.ssboProgram = ssboProgram
+		r.useSSBO = false // Disable SSBO until fixed
+		fmt.Println("✅ SSBO shaders compiled successfully")
+	}
+	
+	// Create volume ray marching shader
+	volumeProgram, err := CompileVolumeRayMarchShaders()
+	if err != nil {
+		fmt.Printf("Warning: Failed to create volume shader: %v\n", err)
+		r.useVolume = false
+	} else {
+		r.volumeProgram = volumeProgram
+		r.useVolume = false // Default to surface rendering
+		fmt.Println("✅ Volume ray marching shaders compiled successfully")
+	}
 	
 	// Create fullscreen quad for ray marching
 	r.createQuad()
@@ -339,6 +388,14 @@ func (r *VoxelRenderer) CreateBuffers(buffers *SharedGPUBuffers) {
 	gl.BindBufferBase(gl.SHADER_STORAGE_BUFFER, 1, r.shellSSBO)
 }
 
+// HasComputeShaderSupport checks if compute shaders are available
+func (r *VoxelRenderer) HasComputeShaderSupport() bool {
+	var major, minor int32
+	gl.GetIntegerv(gl.MAJOR_VERSION, &major)
+	gl.GetIntegerv(gl.MINOR_VERSION, &minor)
+	return major > 4 || (major == 4 && minor >= 3)
+}
+
 // UpdateBuffers updates the GPU buffers with new voxel data
 func (r *VoxelRenderer) UpdateBuffers(buffers *SharedGPUBuffers) {
 	// Update voxel data
@@ -347,6 +404,23 @@ func (r *VoxelRenderer) UpdateBuffers(buffers *SharedGPUBuffers) {
 		voxelSize := len(buffers.voxelData) * int(unsafe.Sizeof(GPUVoxelMaterial{}))
 		gl.BufferSubData(gl.SHADER_STORAGE_BUFFER, 0, voxelSize, unsafe.Pointer(&buffers.voxelData[0]))
 	}
+}
+
+// SetOptimizedBuffers uses optimized GPU buffer manager instead of copying data
+func (r *VoxelRenderer) SetOptimizedBuffers(mgr *WindowsGPUBufferManager) {
+	// Replace our SSBOs with the optimized ones
+	if r.voxelSSBO != 0 {
+		gl.DeleteBuffers(1, &r.voxelSSBO)
+	}
+	if r.shellSSBO != 0 {
+		gl.DeleteBuffers(1, &r.shellSSBO)
+	}
+	if r.lonCountSSBO != 0 {
+		gl.DeleteBuffers(1, &r.lonCountSSBO)
+	}
+	
+	// Use the optimized buffer IDs
+	r.voxelSSBO, r.shellSSBO, r.lonCountSSBO = mgr.GetBufferIDs()
 }
 
 // UpdateVoxelTextures updates the voxel textures from planet data
@@ -361,39 +435,63 @@ func (r *VoxelRenderer) UpdateVoxelTextures(planet *VoxelPlanet) {
 func (r *VoxelRenderer) Render() {
 	gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
 	
-	// Use ray marching program
-	gl.UseProgram(r.rayMarchProgram)
+	// Choose shader program based on mode
+	var program uint32
+	if r.useVolume && r.volumeProgram != 0 {
+		program = r.volumeProgram
+	} else if r.useSSBO && r.ssboProgram != 0 {
+		program = r.ssboProgram
+	} else {
+		program = r.rayMarchProgram
+	}
+	
+	// Use selected program
+	gl.UseProgram(program)
 	
 	// Set uniforms
 	invViewProj := r.projMatrix.Mul4(r.viewMatrix).Inv()
-	gl.UniformMatrix4fv(gl.GetUniformLocation(r.rayMarchProgram, gl.Str("invViewProj\x00")), 1, false, &invViewProj[0])
-	gl.Uniform3fv(gl.GetUniformLocation(r.rayMarchProgram, gl.Str("cameraPos\x00")), 1, &r.cameraPos[0])
-	gl.Uniform1f(gl.GetUniformLocation(r.rayMarchProgram, gl.Str("planetRadius\x00")), r.planetRadius)
-	gl.Uniform1i(gl.GetUniformLocation(r.rayMarchProgram, gl.Str("renderMode\x00")), r.renderMode)
+	gl.UniformMatrix4fv(gl.GetUniformLocation(program, gl.Str("invViewProj\x00")), 1, false, &invViewProj[0])
+	gl.Uniform3fv(gl.GetUniformLocation(program, gl.Str("cameraPos\x00")), 1, &r.cameraPos[0])
+	gl.Uniform1f(gl.GetUniformLocation(program, gl.Str("planetRadius\x00")), r.planetRadius)
+	gl.Uniform1i(gl.GetUniformLocation(program, gl.Str("renderMode\x00")), r.renderMode)
 	
 	// Cross-section uniforms
 	crossSectionInt := int32(0)
 	if r.crossSection {
 		crossSectionInt = 1
 	}
-	gl.Uniform1i(gl.GetUniformLocation(r.rayMarchProgram, gl.Str("crossSection\x00")), crossSectionInt)
-	gl.Uniform1i(gl.GetUniformLocation(r.rayMarchProgram, gl.Str("crossSectionAxis\x00")), r.crossSectionAxis)
-	gl.Uniform1f(gl.GetUniformLocation(r.rayMarchProgram, gl.Str("crossSectionPos\x00")), r.crossSectionPos)
+	gl.Uniform1i(gl.GetUniformLocation(program, gl.Str("crossSection\x00")), crossSectionInt)
+	gl.Uniform1i(gl.GetUniformLocation(program, gl.Str("crossSectionAxis\x00")), r.crossSectionAxis)
+	gl.Uniform1f(gl.GetUniformLocation(program, gl.Str("crossSectionPos\x00")), r.crossSectionPos)
 	
 	// Add shell count uniform - use the actual planet shell count
 	shellCount := r.planetShellCount
 	if shellCount == 0 {
 		shellCount = 20 // Default fallback
 	}
-	gl.Uniform1i(gl.GetUniformLocation(r.rayMarchProgram, gl.Str("shellCount\x00")), shellCount)
+	gl.Uniform1i(gl.GetUniformLocation(program, gl.Str("shellCount\x00")), shellCount)
 	
-	// Bind voxel textures
-	if r.voxelTextures != nil {
-		r.voxelTextures.Bind()
-		gl.Uniform1i(gl.GetUniformLocation(r.rayMarchProgram, gl.Str("materialTexture\x00")), 0)
-		gl.Uniform1i(gl.GetUniformLocation(r.rayMarchProgram, gl.Str("temperatureTexture\x00")), 1)
-		gl.Uniform1i(gl.GetUniformLocation(r.rayMarchProgram, gl.Str("velocityTexture\x00")), 2)
-		gl.Uniform1i(gl.GetUniformLocation(r.rayMarchProgram, gl.Str("shellInfoTexture\x00")), 3)
+	// Set volume rendering uniforms if using volume shader
+	if r.useVolume && r.volumeProgram != 0 {
+		gl.Uniform1f(gl.GetUniformLocation(program, gl.Str("opacityScale\x00")), r.opacityScale)
+		gl.Uniform1f(gl.GetUniformLocation(program, gl.Str("stepSize\x00")), r.stepSize)
+		gl.Uniform1i(gl.GetUniformLocation(program, gl.Str("maxStepsVolume\x00")), r.maxStepsVolume)
+		gl.Uniform1f(gl.GetUniformLocation(program, gl.Str("densityThreshold\x00")), r.densityThreshold)
+	}
+	
+	// Bind data based on mode
+	if r.useSSBO && r.ssboProgram != 0 {
+		// SSBOs are already bound to binding points 0 and 1
+		// No additional binding needed here
+	} else {
+		// Bind voxel textures for texture-based rendering
+		if r.voxelTextures != nil {
+			r.voxelTextures.Bind()
+			gl.Uniform1i(gl.GetUniformLocation(program, gl.Str("materialTexture\x00")), 0)
+			gl.Uniform1i(gl.GetUniformLocation(program, gl.Str("temperatureTexture\x00")), 1)
+			gl.Uniform1i(gl.GetUniformLocation(program, gl.Str("velocityTexture\x00")), 2)
+			gl.Uniform1i(gl.GetUniformLocation(program, gl.Str("shellInfoTexture\x00")), 3)
+		}
 	}
 	
 	// Draw fullscreen quad
@@ -445,12 +543,29 @@ func (r *VoxelRenderer) onKey(key glfw.Key, scancode int, action glfw.Action, mo
 		r.window.SetShouldClose(true)
 	case glfw.Key1:
 		r.renderMode = 0 // Material
+		fmt.Println("Switched to material view")
 	case glfw.Key2:
 		r.renderMode = 1 // Temperature
+		fmt.Println("Switched to temperature view")
 	case glfw.Key3:
 		r.renderMode = 2 // Velocity
+		fmt.Println("Switched to velocity view")
 	case glfw.Key4:
 		r.renderMode = 3 // Age
+		fmt.Println("Switched to age view")
+	case glfw.Key5:
+		r.renderMode = 4 // Plates
+		r.showPlates = true
+		fmt.Println("Switched to plate tectonics view")
+		fmt.Println("Click on plates to see their information")
+	case glfw.KeyB:
+		// Toggle boundary highlighting
+		r.highlightBoundaries = !r.highlightBoundaries
+		if r.highlightBoundaries {
+			fmt.Println("Plate boundaries highlighted")
+		} else {
+			fmt.Println("Plate boundaries normal")
+		}
 	case glfw.KeyX:
 		r.crossSection = !r.crossSection
 		r.crossSectionAxis = 0
@@ -460,6 +575,63 @@ func (r *VoxelRenderer) onKey(key glfw.Key, scancode int, action glfw.Action, mo
 	case glfw.KeyZ:
 		r.crossSection = !r.crossSection
 		r.crossSectionAxis = 2
+	case glfw.KeyS:
+		// Toggle SSBO mode
+		if r.ssboProgram != 0 {
+			r.useSSBO = !r.useSSBO
+			if r.useSSBO {
+				fmt.Println("Switched to SSBO-based rendering")
+			} else {
+				fmt.Println("Switched to texture-based rendering")
+			}
+		}
+	case glfw.KeyV:
+		// Toggle volume rendering
+		if r.volumeProgram != 0 {
+			r.useVolume = !r.useVolume
+			if r.useVolume {
+				fmt.Println("Switched to volume rendering - see inside the planet!")
+				fmt.Println("Use +/- to adjust opacity, [/] to adjust step size")
+			} else {
+				fmt.Println("Switched to surface rendering")
+			}
+		}
+	case glfw.KeyEqual, glfw.KeyKPAdd:
+		// Increase opacity
+		if r.useVolume {
+			r.opacityScale = r.opacityScale * 1.2
+			if r.opacityScale > 10.0 {
+				r.opacityScale = 10.0
+			}
+			fmt.Printf("Volume opacity scale: %.2f\n", r.opacityScale)
+		}
+	case glfw.KeyMinus, glfw.KeyKPSubtract:
+		// Decrease opacity
+		if r.useVolume {
+			r.opacityScale = r.opacityScale / 1.2
+			if r.opacityScale < 0.1 {
+				r.opacityScale = 0.1
+			}
+			fmt.Printf("Volume opacity scale: %.2f\n", r.opacityScale)
+		}
+	case glfw.KeyLeftBracket:
+		// Decrease step size (better quality)
+		if r.useVolume {
+			r.stepSize = r.stepSize / 1.2
+			if r.stepSize < 0.1 {
+				r.stepSize = 0.1
+			}
+			fmt.Printf("Volume step size: %.2f (smaller = better quality)\n", r.stepSize)
+		}
+	case glfw.KeyRightBracket:
+		// Increase step size (faster)
+		if r.useVolume {
+			r.stepSize = r.stepSize * 1.2
+			if r.stepSize > 5.0 {
+				r.stepSize = 5.0
+			}
+			fmt.Printf("Volume step size: %.2f (larger = faster)\n", r.stepSize)
+		}
 	}
 }
 
@@ -483,6 +655,11 @@ func (r *VoxelRenderer) onMouseButton(button glfw.MouseButton, action glfw.Actio
 		if action == glfw.Press {
 			r.mouseDown = true
 			r.lastMouseX, r.lastMouseY = r.window.GetCursorPos()
+			
+			// Check for plate selection in plate mode
+			if r.renderMode == 4 && r.planetRef != nil {
+				r.HandleMouseClick(r.lastMouseX, r.lastMouseY, r.planetRef)
+			}
 		} else if action == glfw.Release {
 			r.mouseDown = false
 		}
@@ -530,9 +707,18 @@ func (r *VoxelRenderer) Terminate() {
 		r.voxelTextures.Cleanup()
 	}
 	gl.DeleteProgram(r.rayMarchProgram)
+	if r.ssboProgram != 0 {
+		gl.DeleteProgram(r.ssboProgram)
+	}
+	if r.volumeProgram != 0 {
+		gl.DeleteProgram(r.volumeProgram)
+	}
 	gl.DeleteVertexArrays(1, &r.quadVAO)
 	gl.DeleteBuffers(1, &r.voxelSSBO)
 	gl.DeleteBuffers(1, &r.shellSSBO)
+	if r.lonCountSSBO != 0 {
+		gl.DeleteBuffers(1, &r.lonCountSSBO)
+	}
 	r.window.Destroy()
 	glfw.Terminate()
 }
