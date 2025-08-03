@@ -179,21 +179,14 @@ func main() {
 		// Use optimized buffers
 		gpuBufferMgr.UpdateFromPlanet(planet)
 		renderer.SetOptimizedBuffers(gpuBufferMgr)
-		// Don't force SSBO mode - let's use texture mode for now
-		renderer.UseSSBO = false
+		// Using texture mode
 		fmt.Println("Using texture rendering mode with optimized GPU buffers")
 	}
 
 	// Initialize voxel textures
 	renderer.UpdateVoxelTextures(planet)
 	
-	// Initialize virtual voxel GPU system if enabled
-	if *virtualVoxels && planet.VirtualVoxelSystem != nil {
-		if err := renderer.InitializeVirtualVoxelGPU(planet); err != nil {
-			fmt.Printf("⚠️  Failed to initialize virtual voxel GPU: %v\n", err)
-			// Fall back to CPU virtual voxels
-		}
-	}
+	// Virtual voxel system removed - using standard grid
 
 	// Simulation parameters
 	simSpeed := 1000000.0 // 1 million years per second
@@ -264,22 +257,6 @@ func main() {
 		if physicsUpdated {
 			// Updates tracked internally
 			
-			// Update virtual voxels on GPU if enabled
-			if renderer.IsUsingVirtualVoxels() {
-				// Calculate physics timestep (matching what physics thread uses)
-				physicsTimestep := float32(physicsEngine.GetPhysicsUpdateInterval() * currentSpeed)
-				
-				// Extract plate velocities from physics system
-				if planet.Physics != nil {
-					if vp, ok := planet.Physics.(*physics.VoxelPhysics); ok && vp.GetPlateManager() != nil {
-						plateVelocities := vp.GetPlateManager().GetPlateVelocities()
-						renderer.SetPlateVelocities(plateVelocities)
-					}
-				}
-				
-				// Run GPU physics compute shader
-				renderer.UpdateVirtualVoxels(physicsTimestep)
-			}
 
 			if gpuBufferMgr != nil {
 				// Using optimized GPU buffer manager
@@ -311,12 +288,8 @@ func main() {
 				renderer.UpdateBuffers(sharedBuffers)
 			}
 
-			// Also update voxel textures when not using SSBO
-			if !renderer.UseSSBO {
-				// Update textures when using texture mode
-				renderer.UpdateVoxelTextures(planet)
-				// Textures updated
-			}
+			// Also update voxel textures when physics updated
+			renderer.UpdateVoxelTextures(planet)
 		}
 
 		// Render
@@ -327,7 +300,7 @@ func main() {
 		totalFrameCount++
 
 		// Update stats overlay and console output
-		if now.Sub(lastFPSTime).Seconds() >= 0.5 { // Update every 0.5 seconds
+		if now.Sub(lastFPSTime).Seconds() >= 5.0 { // Update every 5 seconds
 			fps := float64(frameCount) / now.Sub(lastFPSTime).Seconds()
 			renderer.UpdateStats(fps)
 

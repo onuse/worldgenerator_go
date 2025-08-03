@@ -73,6 +73,7 @@ func NewVoxelTextureData(maxShells int) *VoxelTextureData {
 }
 
 var debugOnce = true
+var updateCount = 0
 
 // sampleVoxelAtLocation samples voxel data at a specific lat/lon position
 // It handles the non-uniform longitude distribution by finding the correct voxel
@@ -114,6 +115,8 @@ func sampleVoxelAtLocation(shell *core.SphericalShell, lat, lon float64) core.Vo
 // UpdateFromPlanet updates textures with planet voxel data
 
 func (vtd *VoxelTextureData) UpdateFromPlanet(planet *core.VoxelPlanet) {
+	updateCount++
+	
 	// Track update timing
 	if int(planet.Time/1e8) % 10 == 0 && int(planet.Time/1e8) != vtd.lastDebugOutput {
 		vtd.lastDebugOutput = int(planet.Time/1e8)
@@ -170,10 +173,13 @@ func (vtd *VoxelTextureData) UpdateFromPlanet(planet *core.VoxelPlanet) {
 			}
 		}
 
-		// Debug output for surface shell (only once)
-		if debugOnce && shellIdx == len(planet.Shells)-2 {
-			fmt.Printf("Surface shell %d (r=%.0f-%.0f km): %d non-air voxels out of %d texture pixels\n",
-				shellIdx, shell.InnerRadius/1000, shell.OuterRadius/1000, nonAirCount, vtd.textureSize*vtd.textureSize)
+		// Debug output for surface shell
+		if shellIdx == len(planet.Shells)-2 {
+			// Always print first few updates and then periodically
+			if updateCount <= 5 || updateCount % 100 == 0 {
+				fmt.Printf("[Update %d] Surface shell %d (r=%.0f-%.0f km): %d non-air voxels out of %d texture pixels\n",
+					updateCount, shellIdx, shell.InnerRadius/1000, shell.OuterRadius/1000, nonAirCount, vtd.textureSize*vtd.textureSize)
+			}
 
 			// Check material distribution
 			matCounts := make(map[core.MaterialType]int)
@@ -181,43 +187,10 @@ func (vtd *VoxelTextureData) UpdateFromPlanet(planet *core.VoxelPlanet) {
 				mat := core.MaterialType(materialData[i])
 				matCounts[mat]++
 			}
-			fmt.Printf("Material distribution in texture: %+v\n", matCounts)
-
-			// Also check voxel distribution
-			voxelMatCounts := make(map[core.MaterialType]int)
-			totalVoxels := 0
-			for latIdx := range shell.Voxels {
-				for lonIdx := range shell.Voxels[latIdx] {
-					mat := shell.Voxels[latIdx][lonIdx].Type
-					voxelMatCounts[mat]++
-					totalVoxels++
-				}
-			}
-			fmt.Printf("Voxel distribution in shell: %+v (total: %d)\n", voxelMatCounts, totalVoxels)
-
-			// Debug: Check specific texture positions
-			fmt.Printf("\nSampling debug at specific texture positions:\n")
-			testPositions := []struct {
-				x, y int
-				desc string
-			}{
-				{256, 256, "center"},
-				{128, 256, "left"},
-				{384, 256, "right"},
-				{256, 128, "top"},
-				{256, 384, "bottom"},
-			}
-			for _, pos := range testPositions {
-				if pos.x < int(vtd.textureSize) && pos.y < int(vtd.textureSize) {
-					idx := pos.y*int(vtd.textureSize) + pos.x
-					mat := core.MaterialType(materialData[idx])
-					u := float64(pos.x) / float64(vtd.textureSize)
-					v := float64(pos.y) / float64(vtd.textureSize)
-					lon := u*360.0 - 180.0
-					lat := v*180.0 - 90.0
-					fmt.Printf("  Tex(%d,%d) -> lat=%.1f lon=%.1f -> material=%v\n",
-						pos.x, pos.y, lat, lon, mat)
-				}
+			if updateCount <= 5 || updateCount % 100 == 0 {
+				fmt.Printf("  Material distribution in texture: Water=%d, Land=%d, Other=%d\n", 
+					matCounts[core.MatWater], matCounts[core.MatGranite], 
+					len(materialData) - matCounts[core.MatWater] - matCounts[core.MatGranite])
 			}
 
 			debugOnce = false

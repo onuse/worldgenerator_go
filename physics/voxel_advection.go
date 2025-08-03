@@ -3,6 +3,7 @@ package physics
 import (
 	"fmt"
 	"math"
+	"time"
 	"worldgenerator/core"
 )
 
@@ -10,19 +11,24 @@ import (
 type VoxelAdvection struct {
 	planet  *core.VoxelPlanet
 	physics *VoxelPhysics
+	waterFlow *WaterFlow
 
 	// Temporary buffers for advection
 	tempMaterials [][]core.VoxelMaterial
 	
 	// Tracking for sea level changes
 	lastReportedSeaLevel float64
+	
+	// Timing for debug output
+	lastAdvectionReport time.Time
 }
 
 // NewVoxelAdvection creates an advection simulator
 func NewVoxelAdvection(planet *core.VoxelPlanet, physics *VoxelPhysics) *VoxelAdvection {
 	return &VoxelAdvection{
-		planet:  planet,
-		physics: physics,
+		planet:    planet,
+		physics:   physics,
+		waterFlow: NewWaterFlow(planet),
 	}
 }
 
@@ -650,11 +656,26 @@ func (va *VoxelAdvection) advectSurfacePlates(dt float64) {
 		return
 	}
 	
-	// Debug output - only show when significant movement occurs
-	if len(movements) > 100 {
+	// Debug output - only show when significant movement occurs and every 5 seconds
+	if len(movements) > 100 && time.Since(va.lastAdvectionReport).Seconds() > 5.0 {
 		yearsElapsed := dt / (365.25 * 24 * 3600)
-		fmt.Printf("ADVECTION: %d voxels moving after %.1f years (%.1f My total)\n", 
-			len(movements), yearsElapsed, va.planet.Time/1e6)
+		
+		// Count voxels with velocity
+		velCount := 0
+		maxVel := float32(0.0)
+		for _, move := range movements {
+			vel := float32(math.Sqrt(float64(move.voxel.VelTheta*move.voxel.VelTheta + move.voxel.VelPhi*move.voxel.VelPhi)))
+			if vel > 0 {
+				velCount++
+				if vel > maxVel {
+					maxVel = vel
+				}
+			}
+		}
+		
+		fmt.Printf("ADVECTION: %d voxels moving (%.1f years, %.1f My total). %d have velocity, max=%.2e m/s\n", 
+			len(movements), yearsElapsed, va.planet.Time/1e6, velCount, maxVel)
+		va.lastAdvectionReport = time.Now()
 	}
 	
 	for _, move := range movements {
@@ -747,8 +768,8 @@ func (va *VoxelAdvection) advectSurfacePlates(dt float64) {
 	// Phase 7: Handle shell-to-shell movement for subduction and rising
 	va.handleShellToShellMovement(dt, surfaceShell)
 	
-	// Phase 8: Water flow to fill gaps and coastal erosion
-	va.flowWaterIntoGaps(shell)
+	// Phase 8: Realistic water flow physics
+	va.waterFlow.UpdateFlow(float32(dt))
 	va.applyCoastalErosion(shell)
 	
 	// Phase 9: Update sea level to maintain water conservation
@@ -1396,10 +1417,6 @@ func (va *VoxelAdvection) fillPlateGaps(newVoxels *[][]core.VoxelMaterial, shell
 			voxel.LastMoveTime = float32(va.planet.Time)
 		}
 		
-		// Log significant stretching
-		if deformationRate > 0.2 && len(gapsToFill) > 0 {
-			fmt.Printf("Plate %d: %.1f%% deformation, filled %d gaps\n", 
-				plateID, deformationRate*100, len(gapsToFill))
-		}
+		// Removed debug logging for cleaner output
 	}
 }

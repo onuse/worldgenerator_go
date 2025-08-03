@@ -65,6 +65,14 @@ type VoxelMaterial struct {
 	// Elevation tracking
 	Elevation     float32 // Height above/below mean radius in meters (positive = mountains, negative = trenches)
 	
+	// Water flow properties
+	WaterVolume   float32 // Volume of water in this cell (0-1, where 1 = full)
+	WaterVelocity [3]float32 // Water flow velocity (m/s) in spherical coords [r, theta, phi]
+	
+	// Atmospheric water (for future precipitation)
+	WaterVapor    float32 // Atmospheric water content (kg/m³)
+	CloudDensity  float32 // Cloud formation (0-1)
+	
 	// Melting state
 	MeltFraction  float32 // Fraction of material that is molten (0-1)
 	

@@ -37,6 +37,7 @@ uniform mat4 invViewProj;
 uniform vec3 cameraPos;
 uniform float planetRadius;
 uniform int renderMode;
+uniform float debugValue; // For testing uniform passing
 uniform int crossSection;
 uniform int crossSectionAxis;
 uniform float crossSectionPos;
@@ -71,15 +72,15 @@ MaterialProps getMaterialProps(int matType) {
             props.opacity = 0.001; // Extremely transparent air
             break;
         case 1: // Water
-            props.color = vec3(0.15, 0.4, 0.7); // More realistic ocean blue
+            props.color = vec3(0.0, 0.0, 1.0); // BRIGHT BLUE for debugging
             props.opacity = 1.0; // Fully opaque ocean
             break;
         case 2: // Basalt
-            props.color = vec3(0.25, 0.25, 0.28); // Dark grey volcanic rock
+            props.color = vec3(0.5, 0.5, 0.5); // Grey volcanic rock
             props.opacity = 1.0;
             break;
         case 3: // Granite
-            props.color = vec3(0.35, 0.5, 0.25); // Earth-like continental green
+            props.color = vec3(0.0, 1.0, 0.0); // BRIGHT GREEN for debugging
             props.opacity = 1.0;
             break;
         case 4: // Peridotite
@@ -144,11 +145,17 @@ vec4 sampleVoxelData(vec3 pos) {
     
     // Sample with proper filtering
     vec3 texCoord = vec3(u, v, float(shell));
+    
+    // DEBUG: Check if we're getting valid shell
+    if (shell < 0 || shell >= shellCount) {
+        return vec4(10.0, 0.0, 0.0, 0.0); // Invalid shell - return special value
+    }
+    
     float matType = texture(materialTexture, texCoord).r; // Use nearest filtering for materials
     vec2 tempElev = texture(temperatureTexture, texCoord).rg; // Temperature and elevation
     vec2 vel = texture(velocityTexture, texCoord).rg;
     
-    return vec4(matType, tempElev.r, vel.x, vel.y);
+    return vec4(matType, tempElev.g, vel.x, vel.y); // Return elevation in .y component
 }
 
 // Ray-sphere intersection
@@ -190,14 +197,7 @@ vec4 rayMarchVolume(vec3 ro, vec3 rd) {
             vec3 samplePos = hitPos * 0.999; // Move 0.1% inward
             vec4 voxelData = sampleVoxelData(samplePos);
             
-            // Add procedural noise to break up the grid pattern
-            float noiseScale = 50.0;
-            vec3 noisePos = hitPos / planetRadius * noiseScale;
-            float noise = sin(noisePos.x * 12.96) * sin(noisePos.y * 17.87) * sin(noisePos.z * 15.37);
-            noise = noise * 0.5 + 0.5; // 0 to 1
-            
-            // Use noise to blend between water and land more organically
-            float coastNoise = noise * 0.3 - 0.15; // -0.15 to 0.15
+            // REMOVED: Procedural noise was causing issues
             
             float matTypeFloat = voxelData.x;
             int matType = int(matTypeFloat + 0.5);
@@ -206,8 +206,96 @@ vec4 rayMarchVolume(vec3 ro, vec3 rd) {
             MaterialProps props = getMaterialProps(matType);
             vec3 color = props.color;
             
-            // Keep colors pure without noise variation to avoid dithering
-            // The noise multiplication was contributing to the dithering pattern
+            // Calculate texture coordinates for this position
+            vec3 normalized = normalize(samplePos);
+            float lat = asin(clamp(normalized.z, -1.0, 1.0));
+            float lon = atan(normalized.y, normalized.x);
+            float u = (lon + 3.14159265) / (2.0 * 3.14159265);
+            float v = (lat + 1.57079633) / 3.14159265;
+            
+            // Apply render modes for surface rendering
+            if (renderMode == 0) { // Material mode - use the bright colors we already got
+                // color is already set from getMaterialProps above
+                // Don't change it!
+                // DEBUG: Make sure we see bright colors
+                if (matType == 1) color = vec3(0.0, 0.0, 1.0); // Bright blue water
+                if (matType == 3) color = vec3(0.0, 1.0, 0.0); // Bright green land
+                // DEBUG: Show material type for debugging
+                if (matType == 0) color = vec3(1.0, 1.0, 0.0); // Yellow for air (shouldn't see this!)
+                if (matType == 2) color = vec3(0.5, 0.5, 0.5); // Grey for basalt
+                if (matType == 6) color = vec3(0.9, 0.8, 0.6); // Sandy tan for sediment
+                if (matType == 10) color = vec3(1.0, 0.0, 0.0); // RED for invalid shell
+                
+            } else if (renderMode == 7) { // Elevation visualization
+                float elevation = voxelData.y; // From temperature texture's G channel
+                
+                // Earth-like elevation colors
+                if (elevation < -4000.0) {
+                    color = vec3(0.05, 0.1, 0.3); // Deep ocean
+                } else if (elevation < -2000.0) {
+                    float t = (elevation + 4000.0) / 2000.0;
+                    color = mix(vec3(0.05, 0.1, 0.3), vec3(0.1, 0.3, 0.6), t);
+                } else if (elevation < -200.0) {
+                    float t = (elevation + 2000.0) / 1800.0;
+                    color = mix(vec3(0.1, 0.3, 0.6), vec3(0.2, 0.5, 0.8), t);
+                } else if (elevation < 0.0) {
+                    float t = (elevation + 200.0) / 200.0;
+                    color = mix(vec3(0.2, 0.5, 0.8), vec3(0.3, 0.6, 0.85), t);
+                } else if (elevation < 50.0) {
+                    float t = elevation / 50.0;
+                    color = mix(vec3(0.76, 0.7, 0.5), vec3(0.7, 0.65, 0.45), t);
+                } else if (elevation < 500.0) {
+                    float t = (elevation - 50.0) / 450.0;
+                    color = mix(vec3(0.7, 0.65, 0.45), vec3(0.3, 0.5, 0.2), t);
+                } else if (elevation < 1500.0) {
+                    float t = (elevation - 500.0) / 1000.0;
+                    vec3 hillGreen = vec3(0.25, 0.4, 0.15);
+                    vec3 hillBrown = vec3(0.4, 0.35, 0.25);
+                    color = mix(vec3(0.3, 0.5, 0.2), mix(hillGreen, hillBrown, t*0.3), t);
+                } else if (elevation < 3000.0) {
+                    float t = (elevation - 1500.0) / 1500.0;
+                    vec3 brownRock = vec3(0.45, 0.35, 0.25);
+                    vec3 greyRock = vec3(0.5, 0.48, 0.45);
+                    color = mix(brownRock, greyRock, t);
+                } else if (elevation < 4500.0) {
+                    float t = (elevation - 3000.0) / 1500.0;
+                    color = mix(vec3(0.5, 0.48, 0.45), vec3(0.4, 0.38, 0.36), t);
+                } else {
+                    float t = min((elevation - 4500.0) / 1500.0, 1.0);
+                    color = mix(vec3(0.4, 0.38, 0.36), vec3(0.95, 0.96, 0.98), t);
+                }
+            } else if (renderMode == 1) { // Temperature
+                // Need to fetch temperature from texture directly
+                int shell = findShell(length(samplePos));
+                vec2 tempElev = texture(temperatureTexture, vec3(u, v, float(shell))).rg;
+                float temp = tempElev.r; // Temperature is in R channel
+                float normalizedTemp = clamp((temp - 273.0) / 3000.0, 0.0, 1.0);
+                color = mix(vec3(0.0, 0.0, 1.0), vec3(1.0, 0.0, 0.0), normalizedTemp);
+            } else if (renderMode == 2) { // Velocity
+                float vel = length(voxelData.zw) * 1e9;
+                color = mix(vec3(0.0, 0.0, 0.5), vec3(1.0, 1.0, 0.0), clamp(vel / 5.0, 0.0, 1.0));
+            } else if (renderMode == 4) { // Plate visualization
+                // Use position-based pseudo-plates for now
+                if (matType == 2 || matType == 3) {
+                    float pseudoPlate = float(int(lon * 10.0) + int(lat * 10.0) * 17) * 137.5;
+                    float hue = mod(pseudoPlate, 360.0) / 360.0;
+                    // HSV to RGB conversion
+                    vec3 c = vec3(hue, 0.7, 0.8);
+                    vec4 K = vec4(1.0, 2.0 / 3.0, 1.0 / 3.0, 3.0);
+                    vec3 p = abs(fract(c.xxx + K.xyz) * 6.0 - K.www);
+                    color = c.z * mix(K.xxx, clamp(p - K.xxx, 0.0, 1.0), c.y);
+                } else {
+                    color = vec3(0.1, 0.1, 0.1);
+                }
+            } else if (renderMode == 5) { // Stress
+                float vel = length(voxelData.zw) * 1e9;
+                if (vel > 0.01) {
+                    float normalizedVel = vel / 5.0;
+                    color = mix(vec3(0.0, 0.0, 0.5), vec3(1.0, 0.0, 0.0), clamp(normalizedVel, 0.0, 1.0));
+                } else {
+                    color = vec3(0.05, 0.05, 0.2);
+                }
+            }
             
             // Bright lighting
             vec3 lightDir = normalize(vec3(1.0, 1.0, 0.5));
@@ -291,20 +379,25 @@ vec4 rayMarchVolume(vec3 ro, vec3 rd) {
                 color = hsv.z * mix(K.xxx, clamp(p - K.xxx, 0.0, 1.0), hsv.y);
             }
         } else if (renderMode == 5) { // Stress visualization
-            // Show velocity gradients as stress indicators
+            // Show velocity magnitudes as stress indicators
+            // voxelData.z = VelTheta, voxelData.w = VelPhi
             float vel = length(voxelData.zw) * 1e9; // Convert to cm/year
-            if (matType == 2 || matType == 3) { // Only for crustal material
-                // Scale velocity to reasonable range (0-10 cm/year is typical)
-                float normalizedVel = vel / 10.0;
-                // Red = high stress (high velocity), Blue = low stress
-                color = mix(vec3(0.2, 0.2, 0.8), vec3(1.0, 0.2, 0.2), clamp(normalizedVel, 0.0, 1.0));
-                // Make high stress areas more visible
-                if (normalizedVel > 0.5) {
-                    props.emissive = 0.2;
+            
+            // DEBUG: Show any non-zero velocity as bright color
+            if (abs(voxelData.z) > 0.0 || abs(voxelData.w) > 0.0) {
+                // Show velocity magnitude with better scaling
+                float normalizedVel = vel / 5.0; // 0-5 cm/year range
+                color = mix(vec3(0.0, 0.0, 0.5), vec3(1.0, 0.0, 0.0), clamp(normalizedVel, 0.0, 1.0));
+                props.opacity = 0.9;
+                
+                // Add brightness for any velocity
+                if (vel > 0.1) {
+                    props.emissive = 0.3;
                 }
             } else {
-                // Non-crustal material shown as dark gray
-                color = vec3(0.1, 0.1, 0.1);
+                // Zero velocity shown as dark blue
+                color = vec3(0.05, 0.05, 0.2);
+                props.opacity = 0.5;
             }
         } else if (renderMode == 6) { // Sub-position visualization
             // Show sub-cell positions as color gradient
@@ -459,9 +552,14 @@ void main() {
     vec3 background = vec3(0.05, 0.05, 0.1);
     vec3 finalColor = result.rgb + background * (1.0 - result.a);
     
-    // Debug: if we hit nothing, show bright red
-    if (result.a < 0.01) {
-        finalColor = vec3(1.0, 0.0, 0.0);
+    // Debug: Show render mode as color in corner
+    if (fragCoord.x < 0.1 && fragCoord.y < 0.1) {
+        // Bottom left corner shows render mode
+        if (renderMode == 0) finalColor = vec3(1, 0, 0); // Red for material
+        else if (renderMode == 1) finalColor = vec3(0, 1, 0); // Green for temperature
+        else if (renderMode == 2) finalColor = vec3(0, 0, 1); // Blue for velocity
+        else if (renderMode == 7) finalColor = vec3(1, 1, 0); // Yellow for elevation
+        else finalColor = vec3(1, 0, 1); // Magenta for other
     }
     
     outColor = vec4(finalColor, 1.0);

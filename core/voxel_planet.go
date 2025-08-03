@@ -57,6 +57,29 @@ func CreateVoxelPlanet(radius float64, shellCount int) *VoxelPlanet {
 	planet.SeaLevel = 0 // Start at 0m elevation
 	planet.TotalWaterVolume = planet.CalculateTotalWaterVolume()
 	
+	// Debug: Check velocities in surface shell
+	if len(planet.Shells) >= 2 {
+		surfaceShell := &planet.Shells[len(planet.Shells)-2]
+		velCount := 0
+		maxVel := float32(0.0)
+		for latIdx := range surfaceShell.Voxels {
+			for lonIdx := range surfaceShell.Voxels[latIdx] {
+				voxel := &surfaceShell.Voxels[latIdx][lonIdx]
+				if voxel.Type == MatGranite || voxel.Type == MatBasalt {
+					vel := float32(math.Sqrt(float64(voxel.VelTheta*voxel.VelTheta + voxel.VelPhi*voxel.VelPhi)))
+					if vel > 0 {
+						velCount++
+						if vel > maxVel {
+							maxVel = vel
+						}
+					}
+				}
+			}
+		}
+		fmt.Printf("Initial surface velocities: %d voxels with velocity, max=%.2e m/s (%.1f cm/yr)\n", 
+			velCount, maxVel, maxVel*1e9*365.25*24*3600/1e7)
+	}
+	
 	fmt.Printf("Created voxel planet: radius=%.0fm, shells=%d\n", radius, shellCount)
 	fmt.Printf("Initial water volume: %.2e m³\n", planet.TotalWaterVolume)
 	for i, shell := range planet.Shells {
@@ -197,7 +220,9 @@ func initializePlanetComposition(planet *VoxelPlanet) {
 					
 					// Add initial plate velocities (simple eastward drift)
 					// This gives plates something to work with initially
-					voxel.VelPhi = 1e-9 * float32(1 + 0.5*math.Sin(lat*0.1)) // ~3 cm/year at equator
+					voxel.VelPhi = 3e-9 * float32(1 + 0.5*math.Sin(lat*0.1)) // ~3-4.5 cm/year at equator
+					// Add some variation in latitude velocity too
+					voxel.VelTheta = 1e-9 * float32(math.Sin(lon*0.05)) // Small N-S drift
 				} else if shellIdx == len(planet.Shells)-2 {
 					// Surface shell - recalculate continentalness here
 					lat := getLatitudeForBand(latIdx, shell.LatBands)
@@ -230,7 +255,8 @@ func initializePlanetComposition(planet *VoxelPlanet) {
 						voxel.Type = MatGranite
 						voxel.Density = MaterialProperties[MatGranite].DefaultDensity
 						voxel.IsBrittle = true
-						voxel.VelPhi = 1e-9 * float32(1 + 0.5*math.Sin(lat*0.1))
+						voxel.VelPhi = 3e-9 * float32(1 + 0.5*math.Sin(lat*0.1))
+						voxel.VelTheta = 1e-9 * float32(math.Sin(lon*0.05))
 						
 						// Add initial elevation variation based on simple patterns
 						// Use lat/lon to create mountain ranges
@@ -397,11 +423,10 @@ func (p *VoxelPlanet) UpdateSeaLevel() {
 	// Binary search for the sea level that gives us the target water volume
 	minLevel := -5000.0 // Deepest ocean
 	maxLevel := 1000.0   // Potential high sea level
-	tolerance := 1.0     // 1 meter tolerance
+	tolerance := 10.0    // Increased tolerance to 10 meters to reduce oscillation
 	
 	for maxLevel-minLevel > tolerance {
 		testLevel := (minLevel + maxLevel) / 2
-		p.SeaLevel = testLevel
 		
 		// Calculate volume at this sea level
 		currentVolume := p.CalculateWaterVolumeAtSeaLevel(testLevel)
@@ -415,7 +440,14 @@ func (p *VoxelPlanet) UpdateSeaLevel() {
 		}
 	}
 	
-	p.SeaLevel = (minLevel + maxLevel) / 2
+	newSeaLevel := (minLevel + maxLevel) / 2
+	
+	// Apply damping to prevent oscillation
+	// Only update if change is significant (more than 5 meters)
+	if math.Abs(newSeaLevel - p.SeaLevel) > 5.0 {
+		// Gradually move toward target sea level (50% damping)
+		p.SeaLevel = p.SeaLevel + 0.5*(newSeaLevel - p.SeaLevel)
+	}
 }
 
 // CalculateWaterVolumeAtSeaLevel calculates water volume if sea level was at given elevation
