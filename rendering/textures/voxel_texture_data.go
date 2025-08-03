@@ -45,10 +45,10 @@ func NewVoxelTextureData(maxShells int) *VoxelTextureData {
 	gl.TexParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_S, gl.REPEAT)
 	gl.TexParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
 
-	// Initialize temperature texture (RG: temperature, elevation)
+	// Initialize temperature texture (RGB: temperature, elevation, plateID)
 	gl.BindTexture(gl.TEXTURE_2D_ARRAY, vtd.TemperatureTexture)
-	gl.TexImage3D(gl.TEXTURE_2D_ARRAY, 0, gl.RG32F, vtd.textureSize, vtd.textureSize, vtd.maxShells,
-		0, gl.RG, gl.FLOAT, nil)
+	gl.TexImage3D(gl.TEXTURE_2D_ARRAY, 0, gl.RGB32F, vtd.textureSize, vtd.textureSize, vtd.maxShells,
+		0, gl.RGB, gl.FLOAT, nil)
 	gl.TexParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR)
 	gl.TexParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
 	gl.TexParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_S, gl.REPEAT)
@@ -116,16 +116,16 @@ func sampleVoxelAtLocation(shell *core.SphericalShell, lat, lon float64) core.Vo
 
 func (vtd *VoxelTextureData) UpdateFromPlanet(planet *core.VoxelPlanet) {
 	updateCount++
-	
+
 	// Track update timing
-	if int(planet.Time/1e8) % 10 == 0 && int(planet.Time/1e8) != vtd.lastDebugOutput {
-		vtd.lastDebugOutput = int(planet.Time/1e8)
+	if int(planet.Time/1e8)%10 == 0 && int(planet.Time/1e8) != vtd.lastDebugOutput {
+		vtd.lastDebugOutput = int(planet.Time / 1e8)
 	}
-	
+
 	// Prepare data arrays
 	materialData := make([]float32, vtd.textureSize*vtd.textureSize)
-	tempData := make([]float32, vtd.textureSize*vtd.textureSize*2) // 2 components (temp + elevation)
-	velData := make([]float32, vtd.textureSize*vtd.textureSize*4) // 4 components (vel + sub-pos)
+	tempData := make([]float32, vtd.textureSize*vtd.textureSize*3) // 3 components (temp + elevation + plateID)
+	velData := make([]float32, vtd.textureSize*vtd.textureSize*4)  // 4 components (vel + sub-pos)
 
 	// Update each shell
 	for shellIdx, shell := range planet.Shells {
@@ -136,6 +136,8 @@ func (vtd *VoxelTextureData) UpdateFromPlanet(planet *core.VoxelPlanet) {
 		// Clear arrays
 		for i := range materialData {
 			materialData[i] = 0
+		}
+		for i := 0; i < len(tempData); i++ {
 			tempData[i] = 0
 		}
 		for i := range velData {
@@ -164,10 +166,11 @@ func (vtd *VoxelTextureData) UpdateFromPlanet(planet *core.VoxelPlanet) {
 				if voxel.Type != core.MatAir {
 					nonAirCount++
 				}
-				tempData[idx*2] = voxel.Temperature
-				tempData[idx*2+1] = voxel.Elevation
-				velData[idx*4] = voxel.VelTheta
-				velData[idx*4+1] = voxel.VelPhi
+				tempData[idx*3] = voxel.Temperature
+				tempData[idx*3+1] = voxel.Elevation
+				tempData[idx*3+2] = float32(voxel.PlateID)
+				velData[idx*4] = voxel.VelNorth
+				velData[idx*4+1] = voxel.VelEast
 				velData[idx*4+2] = voxel.SubPosLat
 				velData[idx*4+3] = voxel.SubPosLon
 			}
@@ -175,10 +178,33 @@ func (vtd *VoxelTextureData) UpdateFromPlanet(planet *core.VoxelPlanet) {
 
 		// Debug output for surface shell
 		if shellIdx == len(planet.Shells)-2 {
+			// Count unique plate IDs
+			plateIDs := make(map[int32]bool)
+			maxVel := float32(0.0)
+			velCount := 0
+			for _, row := range shell.Voxels {
+				for _, voxel := range row {
+					if voxel.PlateID > 0 && (voxel.Type == core.MatGranite || voxel.Type == core.MatBasalt) {
+						plateIDs[voxel.PlateID] = true
+					}
+					// Check velocities
+					vel := float32(math.Sqrt(float64(voxel.VelNorth*voxel.VelNorth + voxel.VelEast*voxel.VelEast)))
+					if vel > 0 {
+						velCount++
+						if vel > maxVel {
+							maxVel = vel
+						}
+					}
+				}
+			}
+
 			// Always print first few updates and then periodically
-			if updateCount <= 5 || updateCount % 100 == 0 {
+			if updateCount <= 5 || updateCount%100 == 0 {
+				fmt.Printf("Surface shell has %d unique plate IDs\n", len(plateIDs))
 				fmt.Printf("[Update %d] Surface shell %d (r=%.0f-%.0f km): %d non-air voxels out of %d texture pixels\n",
 					updateCount, shellIdx, shell.InnerRadius/1000, shell.OuterRadius/1000, nonAirCount, vtd.textureSize*vtd.textureSize)
+				fmt.Printf("  Velocities: %d voxels with velocity, max=%.2e m/s (%.1f cm/yr)\n",
+					velCount, maxVel, maxVel*1e9*365.25*24*3600/1e7)
 			}
 
 			// Check material distribution
@@ -187,10 +213,28 @@ func (vtd *VoxelTextureData) UpdateFromPlanet(planet *core.VoxelPlanet) {
 				mat := core.MaterialType(materialData[i])
 				matCounts[mat]++
 			}
-			if updateCount <= 5 || updateCount % 100 == 0 {
-				fmt.Printf("  Material distribution in texture: Water=%d, Land=%d, Other=%d\n", 
-					matCounts[core.MatWater], matCounts[core.MatGranite], 
-					len(materialData) - matCounts[core.MatWater] - matCounts[core.MatGranite])
+			if updateCount <= 5 || updateCount%100 == 0 {
+				fmt.Printf("  Material distribution in texture: Water=%d, Land=%d, Other=%d\n",
+					matCounts[core.MatWater], matCounts[core.MatGranite],
+					len(materialData)-matCounts[core.MatWater]-matCounts[core.MatGranite])
+			}
+
+			// Check velocity data in texture
+			maxTexVel := float32(0.0)
+			texVelCount := 0
+			for i := 0; i < len(velData)/4; i++ {
+				velN := velData[i*4]
+				velE := velData[i*4+1]
+				vel := float32(math.Sqrt(float64(velN*velN + velE*velE)))
+				if vel > 0 {
+					texVelCount++
+					if vel > maxTexVel {
+						maxTexVel = vel
+					}
+				}
+			}
+			if updateCount <= 5 || updateCount%100 == 0 {
+				fmt.Printf("  Texture velocities: %d pixels with velocity, max=%.2e m/s\n", texVelCount, maxTexVel)
 			}
 
 			debugOnce = false
@@ -205,7 +249,7 @@ func (vtd *VoxelTextureData) UpdateFromPlanet(planet *core.VoxelPlanet) {
 		gl.BindTexture(gl.TEXTURE_2D_ARRAY, vtd.TemperatureTexture)
 		gl.TexSubImage3D(gl.TEXTURE_2D_ARRAY, 0, 0, 0, int32(shellIdx),
 			vtd.textureSize, vtd.textureSize, 1,
-			gl.RG, gl.FLOAT, unsafe.Pointer(&tempData[0]))
+			gl.RGB, gl.FLOAT, unsafe.Pointer(&tempData[0]))
 
 		gl.BindTexture(gl.TEXTURE_2D_ARRAY, vtd.VelocityTexture)
 		gl.TexSubImage3D(gl.TEXTURE_2D_ARRAY, 0, 0, 0, int32(shellIdx),

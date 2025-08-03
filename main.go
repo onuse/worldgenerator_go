@@ -124,32 +124,24 @@ func main() {
 	renderer.PlanetRef = planet
 
 	// Try to create GPU compute physics (OpenGL 4.3 compute shaders)
-	// TODO: Implement ComputePhysics when needed
-	// var computePhysics *physics.ComputePhysics
-	// useGPUPhysics := false
-	// if *gpuType == "compute" || (*gpuType == "cpu" && renderer.HasComputeShaderSupport()) {
-	// 	cp, err := physics.NewComputePhysics(planet)
-	// 	if err == nil {
-	// 		computePhysics = cp
-	// 		useGPUPhysics = true
-	// 		defer computePhysics.Release()
-	// 		fmt.Println("✅ Using GPU compute shaders for physics")
+	var computePhysics *gpu.ComputePhysics
+	useGPUPhysics := false
+	if *gpuType == "compute" {
+		cp, err := gpu.NewComputePhysics(planet)
+		if err == nil {
+			computePhysics = cp
+			useGPUPhysics = true
+			defer computePhysics.Release()
+			fmt.Println("✅ Using GPU compute shaders for physics")
 
-	// 		// Initialize plate tectonics if available
-	// 		// TODO: Fix this when physics package is properly integrated
-	// 		// if planet.Physics != nil && planet.Physics.plates != nil {
-	// 		if false {
-	// 			// if err := computePhysics.InitializePlateTectonics(planet.Physics.plates); err == nil {
-	// 			if false {
-	// 				fmt.Println("✅ GPU plate tectonics initialized")
-	// 			} else {
-	// 				fmt.Printf("⚠️  Plate tectonics not available: %v\n", err)
-	// 			}
-	// 		}
-	// 	} else {
-	// 		fmt.Printf("⚠️  Compute shader physics not available: %v\n", err)
-	// 	}
-	// }
+			// Initialize plate tectonics if available
+			// TODO: Fix this when physics package is properly integrated
+			// For now, skip plate tectonics initialization
+			fmt.Println("⚠️  GPU plate tectonics not yet integrated")
+		} else {
+			fmt.Printf("⚠️  Compute shader physics not available: %v\n", err)
+		}
+	}
 
 	// Try to create optimized GPU buffer manager
 	var gpuBufferMgr *gpu.WindowsGPUBufferManager
@@ -203,7 +195,16 @@ func main() {
 	// accelParams := physics.DefaultAcceleratedParams()
 
 	// Create threaded physics engine
-	physicsEngine := physics.NewThreadedPhysicsInterface(planet, gpuCompute, simSpeed)
+	// Use GPU compute physics if available, otherwise use the standard GPU compute interface
+	var physicsCompute gpu.GPUCompute
+	if useGPUPhysics && computePhysics != nil {
+		// Cast ComputePhysics to GPUCompute interface
+		physicsCompute = computePhysics
+		fmt.Println("✅ Physics engine using GPU compute shaders")
+	} else {
+		physicsCompute = gpuCompute
+	}
+	physicsEngine := physics.NewThreadedPhysicsInterface(planet, physicsCompute, simSpeed)
 	defer physicsEngine.Stop()
 
 	// Track last GPU update time

@@ -51,8 +51,8 @@ layout(std430, binding = 0) buffer VoxelData {
     float pressure;
     
     // Velocity
-    float velTheta;
-    float velPhi;
+    float VelNorth;
+    float VelEast;
     float velR;
     
     // Additional properties
@@ -251,8 +251,8 @@ layout(std430, binding = 0) buffer VoxelData {
     float density;
     float temperature;
     float pressure;
-    float velTheta;
-    float velPhi;
+    float VelNorth;
+    float VelEast;
     float velR;
     float age;
     float viscosity;
@@ -355,12 +355,12 @@ void main() {
     float avgRadius = (shells[shell].innerRadius + shells[shell].outerRadius) * 0.5;
     float lateralScale = velR / avgRadius * 0.1; // Simplified lateral flow
     
-    voxels[idx].velTheta += lateralScale * sin(idx * 0.1) * deltaTime;
-    voxels[idx].velPhi += lateralScale * cos(idx * 0.1) * deltaTime;
+    voxels[idx].VelNorth += lateralScale * sin(idx * 0.1) * deltaTime;
+    voxels[idx].VelEast += lateralScale * cos(idx * 0.1) * deltaTime;
     
     // Limit lateral velocities
-    voxels[idx].velTheta = clamp(voxels[idx].velTheta, -maxVel, maxVel);
-    voxels[idx].velPhi = clamp(voxels[idx].velPhi, -maxVel, maxVel);
+    voxels[idx].VelNorth = clamp(voxels[idx].VelNorth, -maxVel, maxVel);
+    voxels[idx].VelEast = clamp(voxels[idx].VelEast, -maxVel, maxVel);
 }
 `
 
@@ -536,4 +536,31 @@ func (cp *ComputePhysics) Release() {
 	if cp.plateTectonics != nil {
 		cp.plateTectonics.Release()
 	}
+}
+
+// Implement GPUCompute interface methods
+func (cp *ComputePhysics) RunTemperatureKernel(dt float32) error {
+	if cp.planetRef == nil {
+		return fmt.Errorf("planet reference is nil")
+	}
+	cp.RunTemperatureDiffusion(dt, float32(cp.planetRef.Radius))
+	return nil
+}
+
+func (cp *ComputePhysics) RunConvectionKernel(dt float32) error {
+	if cp.planetRef == nil {
+		return fmt.Errorf("planet reference is nil")
+	}
+	cp.RunConvection(dt, float32(cp.planetRef.Radius), 9.81)
+	return nil
+}
+
+func (cp *ComputePhysics) RunAdvectionKernel(dt float32) error {
+	// Advection shader not yet implemented
+	// For now, just return nil
+	return nil
+}
+
+func (cp *ComputePhysics) Cleanup() {
+	cp.Release()
 }
