@@ -49,23 +49,27 @@ func NewVoxelPhysics(planet *core.VoxelPlanet) *VoxelPhysics {
 
 	// Identify initial plates
 	vp.plates.IdentifyPlates()
-	fmt.Printf("✅ Identified %d tectonic plates\n", len(vp.plates.Plates))
 
 	// Try to initialize GPU acceleration
 	if gpuCompute, err := gpu.NewMetalCompute(planet); err == nil {
 		if err := gpuCompute.InitializeForPlanet(planet); err == nil {
 			vp.gpuCompute = gpuCompute
 			vp.useGPU = true
-			fmt.Println("✅ GPU acceleration enabled via Metal")
+			// GPU acceleration enabled
 		} else {
 			gpuCompute.Release()
-			fmt.Printf("⚠️  GPU initialization failed: %v\n", err)
+			// GPU initialization failed
 		}
 	} else {
-		fmt.Printf("ℹ️  GPU not available: %v\n", err)
+		// GPU not available - using CPU fallback
 	}
 
 	return vp
+}
+
+// GetPlateManager returns the plate manager for external access
+func (vp *VoxelPhysics) GetPlateManager() *simulation.PlateManager {
+	return vp.plates
 }
 
 // UpdatePhysics performs one physics timestep

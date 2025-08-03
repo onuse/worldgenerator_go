@@ -71,15 +71,15 @@ MaterialProps getMaterialProps(int matType) {
             props.opacity = 0.001; // Extremely transparent air
             break;
         case 1: // Water
-            props.color = vec3(0.0, 0.5, 1.0);
+            props.color = vec3(0.15, 0.4, 0.7); // More realistic ocean blue
             props.opacity = 1.0; // Fully opaque ocean
             break;
         case 2: // Basalt
-            props.color = vec3(0.3, 0.3, 0.35);
+            props.color = vec3(0.25, 0.25, 0.28); // Dark grey volcanic rock
             props.opacity = 1.0;
             break;
         case 3: // Granite
-            props.color = vec3(0.2, 0.7, 0.2);
+            props.color = vec3(0.35, 0.5, 0.25); // Earth-like continental green
             props.opacity = 1.0;
             break;
         case 4: // Peridotite
@@ -145,10 +145,10 @@ vec4 sampleVoxelData(vec3 pos) {
     // Sample with proper filtering
     vec3 texCoord = vec3(u, v, float(shell));
     float matType = texture(materialTexture, texCoord).r; // Use nearest filtering for materials
-    float temp = texture(temperatureTexture, texCoord).r;
+    vec2 tempElev = texture(temperatureTexture, texCoord).rg; // Temperature and elevation
     vec2 vel = texture(velocityTexture, texCoord).rg;
     
-    return vec4(matType, temp, vel.x, vel.y);
+    return vec4(matType, tempElev.r, vel.x, vel.y);
 }
 
 // Ray-sphere intersection
@@ -256,6 +256,14 @@ vec4 rayMarchVolume(vec3 ro, vec3 rd) {
         int matType = int(voxelData.x + 0.5);
         float temperature = voxelData.y;
         
+        // For sub-position visualization, we need to sample the full velocity texture
+        float shellIndex = float(findShell(length(pos)));
+        vec3 normalized = normalize(pos);
+        float lat = asin(clamp(normalized.z, -1.0, 1.0));
+        float lon = atan(normalized.y, normalized.x);
+        float u = (lon + 3.14159265) / (2.0 * 3.14159265);
+        float v = (lat + 1.57079633) / 3.14159265;
+        
         // Get material properties with smooth blending
         MaterialProps props = getMaterialProps(matType);
         
@@ -281,6 +289,117 @@ vec4 rayMarchVolume(vec3 ro, vec3 rd) {
                 vec4 K = vec4(1.0, 2.0 / 3.0, 1.0 / 3.0, 3.0);
                 vec3 p = abs(fract(hsv.xxx + K.xyz) * 6.0 - K.www);
                 color = hsv.z * mix(K.xxx, clamp(p - K.xxx, 0.0, 1.0), hsv.y);
+            }
+        } else if (renderMode == 5) { // Stress visualization
+            // Show velocity gradients as stress indicators
+            float vel = length(voxelData.zw) * 1e9; // Convert to cm/year
+            if (matType == 2 || matType == 3) { // Only for crustal material
+                // Scale velocity to reasonable range (0-10 cm/year is typical)
+                float normalizedVel = vel / 10.0;
+                // Red = high stress (high velocity), Blue = low stress
+                color = mix(vec3(0.2, 0.2, 0.8), vec3(1.0, 0.2, 0.2), clamp(normalizedVel, 0.0, 1.0));
+                // Make high stress areas more visible
+                if (normalizedVel > 0.5) {
+                    props.emissive = 0.2;
+                }
+            } else {
+                // Non-crustal material shown as dark gray
+                color = vec3(0.1, 0.1, 0.1);
+            }
+        } else if (renderMode == 6) { // Sub-position visualization
+            // Show sub-cell positions as color gradient
+            vec4 fullVelData = texture(velocityTexture, vec3(u, v, shellIndex));
+            float subPosLat = fullVelData.z; // Sub-position latitude
+            float subPosLon = fullVelData.w; // Sub-position longitude
+            
+            if (matType == 2 || matType == 3) { // Only for crustal material
+                // Map sub-positions to color
+                // Red channel = longitude sub-position
+                // Green channel = latitude sub-position
+                // Blue channel = magnitude of sub-position offset
+                float offsetMag = length(vec2(subPosLon, subPosLat));
+                color = vec3(subPosLon, subPosLat, offsetMag);
+                
+                // Make visible
+                props.opacity = 0.8;
+                props.emissive = 0.1;
+            } else {
+                // Non-crustal material shown as dark
+                color = vec3(0.05, 0.05, 0.05);
+                props.opacity = 0.1;
+            }
+        } else if (renderMode == 7) { // Elevation/altitude visualization
+            // Get elevation from temperature texture's G channel
+            vec2 tempElev = texture(temperatureTexture, vec3(u, v, shellIndex)).rg;
+            float elevation = tempElev.g; // Elevation in meters
+            
+            if (matType == 2 || matType == 3) { // Only for crustal material
+                // Earth-like elevation colors
+                // Deep ocean = dark blue
+                // Shallow ocean = lighter blue  
+                // Beaches/lowlands = sandy tan
+                // Plains = grass green
+                // Hills = darker green with brown
+                // Mountains = grey/brown rock
+                // Snow caps = white
+                
+                if (elevation < -4000.0) {
+                    // Deep ocean - dark blue
+                    color = vec3(0.05, 0.1, 0.3);
+                } else if (elevation < -2000.0) {
+                    // Mid ocean - medium blue
+                    float t = (elevation + 4000.0) / 2000.0;
+                    color = mix(vec3(0.05, 0.1, 0.3), vec3(0.1, 0.3, 0.6), t);
+                } else if (elevation < -200.0) {
+                    // Shallow ocean - light blue
+                    float t = (elevation + 2000.0) / 1800.0;
+                    color = mix(vec3(0.1, 0.3, 0.6), vec3(0.2, 0.5, 0.8), t);
+                } else if (elevation < 0.0) {
+                    // Continental shelf - very light blue
+                    float t = (elevation + 200.0) / 200.0;
+                    color = mix(vec3(0.2, 0.5, 0.8), vec3(0.3, 0.6, 0.85), t);
+                } else if (elevation < 50.0) {
+                    // Beaches and coastal plains - sandy tan
+                    float t = elevation / 50.0;
+                    color = mix(vec3(0.76, 0.7, 0.5), vec3(0.7, 0.65, 0.45), t);
+                } else if (elevation < 500.0) {
+                    // Lowland plains - grass green
+                    float t = (elevation - 50.0) / 450.0;
+                    color = mix(vec3(0.7, 0.65, 0.45), vec3(0.3, 0.5, 0.2), t);
+                } else if (elevation < 1500.0) {
+                    // Hills - darker green with hints of brown
+                    float t = (elevation - 500.0) / 1000.0;
+                    vec3 hillGreen = vec3(0.25, 0.4, 0.15);
+                    vec3 hillBrown = vec3(0.4, 0.35, 0.25);
+                    color = mix(vec3(0.3, 0.5, 0.2), mix(hillGreen, hillBrown, t*0.3), t);
+                } else if (elevation < 3000.0) {
+                    // Mountains - grey brown rock
+                    float t = (elevation - 1500.0) / 1500.0;
+                    vec3 brownRock = vec3(0.45, 0.35, 0.25);
+                    vec3 greyRock = vec3(0.5, 0.48, 0.45);
+                    color = mix(brownRock, greyRock, t);
+                } else if (elevation < 4500.0) {
+                    // High mountains - darker grey
+                    float t = (elevation - 3000.0) / 1500.0;
+                    color = mix(vec3(0.5, 0.48, 0.45), vec3(0.4, 0.38, 0.36), t);
+                } else {
+                    // Snow caps - white with slight blue tint
+                    float t = min((elevation - 4500.0) / 1500.0, 1.0);
+                    color = mix(vec3(0.4, 0.38, 0.36), vec3(0.95, 0.96, 0.98), t);
+                }
+                
+                // Make mountains more visible
+                if (elevation > 1000.0) {
+                    props.emissive = 0.1 + 0.1 * min(elevation / 8000.0, 1.0);
+                }
+            } else if (matType == 1) { // Water
+                // Show ocean depth
+                color = vec3(0.0, 0.2, 0.4);
+                props.opacity = 0.3;
+            } else {
+                // Non-crustal material
+                color = vec3(0.1, 0.1, 0.1);
+                props.opacity = 0.1;
             }
         }
         

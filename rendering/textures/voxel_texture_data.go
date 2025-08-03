@@ -17,8 +17,9 @@ type VoxelTextureData struct {
 	VelocityTexture    uint32
 	ShellInfoTexture   uint32
 
-	textureSize int32
-	maxShells   int32
+	textureSize     int32
+	maxShells       int32
+	lastDebugOutput int
 }
 
 // NewVoxelTextureData creates texture storage for voxel data
@@ -44,19 +45,19 @@ func NewVoxelTextureData(maxShells int) *VoxelTextureData {
 	gl.TexParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_S, gl.REPEAT)
 	gl.TexParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
 
-	// Initialize temperature texture
+	// Initialize temperature texture (RG: temperature, elevation)
 	gl.BindTexture(gl.TEXTURE_2D_ARRAY, vtd.TemperatureTexture)
-	gl.TexImage3D(gl.TEXTURE_2D_ARRAY, 0, gl.R32F, vtd.textureSize, vtd.textureSize, vtd.maxShells,
-		0, gl.RED, gl.FLOAT, nil)
+	gl.TexImage3D(gl.TEXTURE_2D_ARRAY, 0, gl.RG32F, vtd.textureSize, vtd.textureSize, vtd.maxShells,
+		0, gl.RG, gl.FLOAT, nil)
 	gl.TexParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR)
 	gl.TexParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
 	gl.TexParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_S, gl.REPEAT)
 	gl.TexParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
 
-	// Initialize velocity texture (RG for theta/phi components)
+	// Initialize velocity texture (RGBA: theta/phi velocity, lat/lon sub-position)
 	gl.BindTexture(gl.TEXTURE_2D_ARRAY, vtd.VelocityTexture)
-	gl.TexImage3D(gl.TEXTURE_2D_ARRAY, 0, gl.RG32F, vtd.textureSize, vtd.textureSize, vtd.maxShells,
-		0, gl.RG, gl.FLOAT, nil)
+	gl.TexImage3D(gl.TEXTURE_2D_ARRAY, 0, gl.RGBA32F, vtd.textureSize, vtd.textureSize, vtd.maxShells,
+		0, gl.RGBA, gl.FLOAT, nil)
 	gl.TexParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR)
 	gl.TexParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
 	gl.TexParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_S, gl.REPEAT)
@@ -113,10 +114,15 @@ func sampleVoxelAtLocation(shell *core.SphericalShell, lat, lon float64) core.Vo
 // UpdateFromPlanet updates textures with planet voxel data
 
 func (vtd *VoxelTextureData) UpdateFromPlanet(planet *core.VoxelPlanet) {
+	// Track update timing
+	if int(planet.Time/1e8) % 10 == 0 && int(planet.Time/1e8) != vtd.lastDebugOutput {
+		vtd.lastDebugOutput = int(planet.Time/1e8)
+	}
+	
 	// Prepare data arrays
 	materialData := make([]float32, vtd.textureSize*vtd.textureSize)
-	tempData := make([]float32, vtd.textureSize*vtd.textureSize)
-	velData := make([]float32, vtd.textureSize*vtd.textureSize*2) // 2 components
+	tempData := make([]float32, vtd.textureSize*vtd.textureSize*2) // 2 components (temp + elevation)
+	velData := make([]float32, vtd.textureSize*vtd.textureSize*4) // 4 components (vel + sub-pos)
 
 	// Update each shell
 	for shellIdx, shell := range planet.Shells {
@@ -155,9 +161,12 @@ func (vtd *VoxelTextureData) UpdateFromPlanet(planet *core.VoxelPlanet) {
 				if voxel.Type != core.MatAir {
 					nonAirCount++
 				}
-				tempData[idx] = voxel.Temperature
-				velData[idx*2] = voxel.VelTheta
-				velData[idx*2+1] = voxel.VelPhi
+				tempData[idx*2] = voxel.Temperature
+				tempData[idx*2+1] = voxel.Elevation
+				velData[idx*4] = voxel.VelTheta
+				velData[idx*4+1] = voxel.VelPhi
+				velData[idx*4+2] = voxel.SubPosLat
+				velData[idx*4+3] = voxel.SubPosLon
 			}
 		}
 
@@ -223,12 +232,12 @@ func (vtd *VoxelTextureData) UpdateFromPlanet(planet *core.VoxelPlanet) {
 		gl.BindTexture(gl.TEXTURE_2D_ARRAY, vtd.TemperatureTexture)
 		gl.TexSubImage3D(gl.TEXTURE_2D_ARRAY, 0, 0, 0, int32(shellIdx),
 			vtd.textureSize, vtd.textureSize, 1,
-			gl.RED, gl.FLOAT, unsafe.Pointer(&tempData[0]))
+			gl.RG, gl.FLOAT, unsafe.Pointer(&tempData[0]))
 
 		gl.BindTexture(gl.TEXTURE_2D_ARRAY, vtd.VelocityTexture)
 		gl.TexSubImage3D(gl.TEXTURE_2D_ARRAY, 0, 0, 0, int32(shellIdx),
 			vtd.textureSize, vtd.textureSize, 1,
-			gl.RG, gl.FLOAT, unsafe.Pointer(&velData[0]))
+			gl.RGBA, gl.FLOAT, unsafe.Pointer(&velData[0]))
 	}
 
 	// Update shell info

@@ -6,7 +6,7 @@ import (
 	"log"
 	"runtime"
 	"time"
-	
+
 	"worldgenerator/core"
 	"worldgenerator/gpu"
 	"worldgenerator/gpu/opencl"
@@ -16,7 +16,7 @@ import (
 
 func main() {
 	runtime.LockOSThread()
-	
+
 	// Parse command line flags
 	var (
 		radius        = flag.Float64("radius", 6371000, "Planet radius in meters")
@@ -25,18 +25,51 @@ func main() {
 		width         = flag.Int("width", 1280, "Window width")
 		height        = flag.Int("height", 720, "Window height")
 		quiet         = flag.Bool("quiet", false, "Disable console output for smooth rendering")
+		seed          = flag.Int64("seed", 0, "Random seed for planet generation (0 = use current time)")
+		continents    = flag.Int("continents", 7, "Number of initial continental masses")
+		oceanFraction = flag.Float64("ocean", 0.7, "Fraction of surface covered by ocean (0.0-1.0)")
+		virtualVoxels = flag.Bool("virtual", false, "Use virtual voxel system (experimental)")
 	)
 	flag.Parse()
-	
+
+	// Initialize random seed
+	actualSeed := *seed
+	if actualSeed == 0 {
+		actualSeed = time.Now().Unix()
+	}
+
 	fmt.Println("=== Voxel Planet Evolution Simulator (Native Renderer) ===")
 	fmt.Printf("Planet radius: %.0f m\n", *radius)
 	fmt.Printf("Shell count: %d\n", *shellCount)
 	fmt.Printf("GPU backend: %s\n", *gpuType)
 	fmt.Printf("Window: %dx%d\n", *width, *height)
+	fmt.Printf("Random seed: %d\n", actualSeed)
+	fmt.Printf("Continents: %d masses\n", *continents)
+	fmt.Printf("Ocean coverage: %.0f%%\n", *oceanFraction*100)
+
+	// Create voxel planet with randomization
+	genParams := core.PlanetGenerationParams{
+		Seed:               actualSeed,
+		ContinentCount:     *continents,
+		OceanFraction:      *oceanFraction,
+		MinContinentSize:   0.01, // 1% of surface minimum
+		MaxContinentSize:   0.15, // 15% of surface maximum
+		ContinentRoughness: 0.7,  // Moderately irregular shapes
+	}
+	planet := core.CreateRandomizedPlanet(*radius, *shellCount, genParams)
 	
-	// Create voxel planet
-	planet := core.CreateVoxelPlanet(*radius, *shellCount)
-	
+	// Initialize virtual voxel system if requested
+	if *virtualVoxels {
+		fmt.Println("Initializing virtual voxel system...")
+		vvs := core.NewVirtualVoxelSystem(planet)
+		vvs.ConvertToVirtualVoxels()
+		fmt.Printf("Converting surface voxels to virtual voxels...\n")
+		vvs.CreateBonds()
+		planet.VirtualVoxelSystem = vvs
+		planet.UseVirtualVoxels = true
+		fmt.Printf("Created %d virtual voxels with %d bonds\n", len(vvs.VirtualVoxels), len(vvs.Bonds))
+	}
+
 	// Count voxels
 	totalVoxels := 0
 	for _, shell := range planet.Shells {
@@ -46,11 +79,11 @@ func main() {
 	}
 	fmt.Printf("Total voxels: %d (%.1f million)\n", totalVoxels, float64(totalVoxels)/1000000)
 	fmt.Printf("Data size: %.1f MB per frame\n", float64(totalVoxels*64)/(1024*1024))
-	
+
 	// Initialize GPU compute
 	var gpuCompute gpu.GPUCompute
 	var err error
-	
+
 	switch *gpuType {
 	case "metal":
 		if runtime.GOOS != "darwin" {
@@ -79,17 +112,17 @@ func main() {
 		log.Fatalf("Unknown GPU backend: %s", *gpuType)
 	}
 	defer gpuCompute.Cleanup()
-	
+
 	// Create native OpenGL renderer
 	renderer, err := opengl.NewVoxelRenderer(*width, *height)
 	if err != nil {
 		log.Fatalf("Failed to create renderer: %v", err)
 	}
 	defer renderer.Terminate()
-	
+
 	// Set planet reference for mouse picking
 	renderer.PlanetRef = planet
-	
+
 	// Try to create GPU compute physics (OpenGL 4.3 compute shaders)
 	// TODO: Implement ComputePhysics when needed
 	// var computePhysics *physics.ComputePhysics
@@ -101,7 +134,7 @@ func main() {
 	// 		useGPUPhysics = true
 	// 		defer computePhysics.Release()
 	// 		fmt.Println("✅ Using GPU compute shaders for physics")
-			
+
 	// 		// Initialize plate tectonics if available
 	// 		// TODO: Fix this when physics package is properly integrated
 	// 		// if planet.Physics != nil && planet.Physics.plates != nil {
@@ -117,7 +150,7 @@ func main() {
 	// 		fmt.Printf("⚠️  Compute shader physics not available: %v\n", err)
 	// 	}
 	// }
-	
+
 	// Try to create optimized GPU buffer manager
 	var gpuBufferMgr *gpu.WindowsGPUBufferManager
 	if runtime.GOOS == "windows" || runtime.GOOS == "linux" {
@@ -134,7 +167,7 @@ func main() {
 			fmt.Printf("❌ GPU buffer optimization not available: %v\n", err)
 		}
 	}
-	
+
 	// Create shared buffer manager (fallback)
 	var sharedBuffers *gpu.SharedGPUBuffers
 	if gpuBufferMgr == nil {
@@ -146,52 +179,110 @@ func main() {
 		// Use optimized buffers
 		gpuBufferMgr.UpdateFromPlanet(planet)
 		renderer.SetOptimizedBuffers(gpuBufferMgr)
+		// Don't force SSBO mode - let's use texture mode for now
+		renderer.UseSSBO = false
+		fmt.Println("Using texture rendering mode with optimized GPU buffers")
 	}
-	
+
 	// Initialize voxel textures
 	renderer.UpdateVoxelTextures(planet)
 	
+	// Initialize virtual voxel GPU system if enabled
+	if *virtualVoxels && planet.VirtualVoxelSystem != nil {
+		if err := renderer.InitializeVirtualVoxelGPU(planet); err != nil {
+			fmt.Printf("⚠️  Failed to initialize virtual voxel GPU: %v\n", err)
+			// Fall back to CPU virtual voxels
+		}
+	}
+
 	// Simulation parameters
 	simSpeed := 1000000.0 // 1 million years per second
-	lastTime := time.Now()
+	//speedMultiplier := 1.0 // Additional speed control
+	// lastTime := time.Now() // Not needed with threaded physics
 	frameCount := 0
 	totalFrameCount := 0 // Never reset this one
 	lastFPSTime := time.Now()
-	
+
+	// Create continental drift tracker (removed - not needed with new approach)
+	// driftState := physics.NewContinentalDriftState(planet)
+
+	// Create accelerated physics params (removed - not needed with new approach)
+	// accelParams := physics.DefaultAcceleratedParams()
+
 	// Create threaded physics engine
 	physicsEngine := physics.NewThreadedPhysicsInterface(planet, gpuCompute, simSpeed)
 	defer physicsEngine.Stop()
-	
+
+	// Track last GPU update time
+	//var lastGPUUpdateTime float64 = -1
+
 	fmt.Println("\nControls:")
-	fmt.Println("  1-4: Change visualization (Material/Temperature/Velocity/Age)")
+	fmt.Println("  1-8: Change visualization (Material/Temp/Velocity/Age/Plates/Stress/SubPos/Elevation)")
 	fmt.Println("  X/Y/Z: Toggle cross-section view")
 	fmt.Println("  Mouse: Click and drag to rotate")
 	fmt.Println("  Scroll: Zoom in/out")
+	fmt.Println("  +/-: Speed up/slow down time (current: 1.0x)")
+	fmt.Println("  Shift+1 to 5: Set speed to 10x, 100x, 1000x, 10000x, 100000x")
+	fmt.Println("  0: Reset speed to 1x")
+	fmt.Println("  P: Pause/unpause simulation")
+	fmt.Println("  H: Create hotspot at cursor")
 	fmt.Println("  ESC: Exit")
 	fmt.Println("\nStarting simulation...")
-	
+
 	// Main loop
 	for !renderer.ShouldClose() {
 		renderer.PollEvents()
-		
+
 		// Calculate delta time
 		now := time.Now()
-		dt := now.Sub(lastTime).Seconds()
-		lastTime = now
-		
-		// Check if physics thread has new data
+		// dt := now.Sub(lastTime).Seconds() // Not used anymore
+		// lastTime = now // Not needed anymore
+
+		// Apply speed multiplier from renderer controls
+		currentSpeed := simSpeed * float64(renderer.SpeedMultiplier)
+
+		// Update physics engine with new speed
+		physicsEngine.UpdateSimSpeed(currentSpeed)
+
+		// Check if physics thread has new data (unless paused)
 		physicsUpdated := false
-		if updatedPlanet, hasUpdate := physicsEngine.Update(); hasUpdate {
-			// Use the updated planet data from physics thread
-			planet = updatedPlanet
-			physicsUpdated = true
-			renderer.PlanetRef = planet // Update renderer's reference
+		if !renderer.Paused {
+			if updatedPlanet, hasUpdate := physicsEngine.Update(); hasUpdate {
+				// Use the updated planet data from physics thread
+				planet = updatedPlanet
+				physicsUpdated = true
+				renderer.PlanetRef = planet // Update renderer's reference
+
+				// Debug output removed for cleaner display
+
+				// Don't apply additional acceleration - let physics handle it
+			}
+			// Time is already updated in physics thread
 		}
-		planet.Time += dt * simSpeed
-		
+
 		// Update GPU data only when physics updated
 		if physicsUpdated {
+			// Updates tracked internally
+			
+			// Update virtual voxels on GPU if enabled
+			if renderer.IsUsingVirtualVoxels() {
+				// Calculate physics timestep (matching what physics thread uses)
+				physicsTimestep := float32(physicsEngine.GetPhysicsUpdateInterval() * currentSpeed)
+				
+				// Extract plate velocities from physics system
+				if planet.Physics != nil {
+					if vp, ok := planet.Physics.(*physics.VoxelPhysics); ok && vp.GetPlateManager() != nil {
+						plateVelocities := vp.GetPlateManager().GetPlateVelocities()
+						renderer.SetPlateVelocities(plateVelocities)
+					}
+				}
+				
+				// Run GPU physics compute shader
+				renderer.UpdateVirtualVoxels(physicsTimestep)
+			}
+
 			if gpuBufferMgr != nil {
+				// Using optimized GPU buffer manager
 				// Only include plate data when in plate visualization mode
 				// TODO: Fix this when physics package is properly integrated
 				// if renderer.RenderMode == 4 {
@@ -202,6 +293,8 @@ func main() {
 				// 	}
 				// } else {
 				gpuBufferMgr.UpdateFromPlanet(planet)
+				// Ensure buffers are synced to GPU
+				gpuBufferMgr.BindBuffers()
 				// }
 			} else {
 				// Fallback path - copy through shared buffers
@@ -217,25 +310,27 @@ func main() {
 				// }
 				renderer.UpdateBuffers(sharedBuffers)
 			}
-			
-			// Also update voxel textures (skip if using SSBO or optimized buffers)
-			if gpuBufferMgr == nil && !renderer.UseSSBO {
+
+			// Also update voxel textures when not using SSBO
+			if !renderer.UseSSBO {
+				// Update textures when using texture mode
 				renderer.UpdateVoxelTextures(planet)
+				// Textures updated
 			}
 		}
-		
+
 		// Render
 		renderer.Render()
-		
+
 		// FPS counter and performance report
 		frameCount++
 		totalFrameCount++
-		
+
 		// Update stats overlay and console output
 		if now.Sub(lastFPSTime).Seconds() >= 0.5 { // Update every 0.5 seconds
 			fps := float64(frameCount) / now.Sub(lastFPSTime).Seconds()
 			renderer.UpdateStats(fps)
-			
+
 			// Also print to console if not quiet
 			if !*quiet {
 				// Calculate zoom level
@@ -244,13 +339,20 @@ func main() {
 				// Get physics performance
 				physicsTime := physicsEngine.GetPhysicsFrameTime() * 1000 // Convert to ms
 				// Output with zoom info
-				fmt.Printf("\rFPS: %.1f | Physics: %.1fms | Zoom: %.3f | Distance: %.0f km | Sim Time: %.1f My    ", 
-					fps, physicsTime, zoomLevel, cameraDistance/1000.0, planet.Time/1000000)
+				speedStr := ""
+				if renderer.SpeedMultiplier != 1.0 {
+					speedStr = fmt.Sprintf(" | Speed: %.0fx", renderer.SpeedMultiplier)
+				}
+				if renderer.Paused {
+					speedStr = " | PAUSED"
+				}
+				fmt.Printf("\rFPS: %.1f | Physics: %.1fms | Zoom: %.3f | Distance: %.0f km | Sim Time: %.1f My%s    ",
+					fps, physicsTime, zoomLevel, cameraDistance/1000.0, planet.Time/1000000, speedStr)
 			}
 			frameCount = 0
 			lastFPSTime = now
 		}
 	}
-	
+
 	fmt.Println("\nShutting down...")
 }

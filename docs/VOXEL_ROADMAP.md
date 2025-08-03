@@ -1,312 +1,217 @@
 # Voxel Planet Evolution - Development Roadmap
 
 ## Overview
-Native voxel-based planet simulator with GPU-accelerated physics and direct volume rendering, enabling true 3D geological processes at planetary scale.
+Native voxel-based planet simulator with GPU-accelerated physics and direct volume rendering, enabling true 3D geological processes at planetary scale. Uses enhanced grid system with selective virtual voxels for complex features.
 
 ## Current Status
 - ✅ Voxel physics simulation running on GPU (Metal/Compute Shaders)
 - ✅ Native OpenGL 4.3 renderer with planet visualization
-- ✅ Web-based architecture archived
+- ✅ Virtual voxel system prototyped and tested
 - ✅ Surface and volume rendering implemented
 - ✅ GPU compute shaders for physics (OpenGL 4.3)
 - ✅ Zero-copy GPU buffer sharing (persistent mapped buffers)
-- 🚧 Working on proper plate tectonics simulation
+- 🚧 Implementing enhanced grid with proper plate tectonics
+
+## Architecture Decision
+After extensive prototyping, we've chosen a **hybrid architecture**:
+- **Enhanced Grid System** as the primary simulation layer (performance, compatibility)
+- **Selective Virtual Voxels** for complex features (earthquakes, volcanoes, visible deformation)
+- **Sub-cell positioning** to eliminate grid movement artifacts
+- **Temporal resolution splitting** for optimal performance
 
 ## Development Phases
 
-### Phase 1-4: Core Physics ✅ MOSTLY COMPLETE
-- ✅ Voxel planet structure
-- ✅ Material physics (temperature, pressure, flow)
-- ✅ Mantle convection
-- 🚧 Plate tectonics (basic structure only, no dynamics)
-- ✅ GPU acceleration via Metal/Compute Shaders
+### Phase 1: Enhanced Grid System 🚧 IMMEDIATE PRIORITY
 
-### Phase 5: Native Rendering Pipeline 🚧 IN PROGRESS
+#### 1.1 Sub-cell Movement System
+- [ ] Add sub-position tracking to VoxelMaterial struct
+- [ ] Implement smooth movement accumulation
+- [ ] Handle cell boundary transitions without snapping
+- [ ] Maintain material continuity during transitions
+- [ ] Test with existing plate tectonics system
 
-#### 5.1 Basic Infrastructure ✅ COMPLETE
-- [x] GLFW window management
-- [x] OpenGL 4.1 context
-- [x] Basic sphere rendering
-- [x] Camera controls
-- [x] Build system
+#### 1.2 Vertical Layer Transitions
+- [ ] Implement shell-to-shell movement for subduction/rising
+- [ ] Add vertical velocity component to plate motion
+- [ ] Handle material transformations during vertical movement
+  - [ ] Continental crust → Magma (when subducting deep)
+  - [ ] Magma → Oceanic crust (when rising to surface)
+  - [ ] Pressure/temperature based phase changes
+- [ ] Maintain mass conservation during transitions
 
-#### 5.2 Voxel Data Visualization ✅ COMPLETE
+#### 1.3 Temporal Resolution Optimization
+- [ ] Separate update frequencies for different systems:
+  - [ ] Rendering: 60 FPS (always smooth)
+  - [ ] Physics integration: 30 FPS (critical calculations)
+  - [ ] Plate movement: 10 FPS (slow process)
+  - [ ] Geological processes: 1 FPS (very slow)
+- [ ] Implement interpolation between physics frames
+- [ ] Add configurable time scales for each system
 
-1. **GPU Buffer Architecture** ✅
-   - [x] Proper SSBO setup for voxel data
-   - [x] Fixed struct alignment issues  
-   - [x] Efficient data packing for GPU
-   - [x] Shell metadata structure
+### Phase 2: Plate Boundary Detection & Classification
 
-2. **Basic Voxel Sampling** ✅
-   - [x] Simple voxel lookup in shader
-   - [x] Spherical coordinate mapping
-   - [x] Material type visualization
-   - [x] Texture-based and SSBO-based sampling
+#### 2.1 Boundary Detection System
+- [ ] Implement efficient neighbor checking for plate IDs
+- [ ] Calculate relative velocities between plates
+- [ ] Classify boundary types:
+  - [ ] Divergent (spreading apart)
+  - [ ] Convergent (colliding)
+  - [ ] Transform (sliding past)
+- [ ] Track boundary stress accumulation
 
-3. **Surface Rendering** ✅
-   - [x] Ray-sphere intersection
-   - [x] Find surface voxels (non-air)
-   - [x] Material-based coloring
-   - [x] Basic lighting
+#### 2.2 Boundary-Specific Behaviors
+- [ ] **Divergent Boundaries**:
+  - [ ] Create new oceanic crust
+  - [ ] Implement seafloor spreading
+  - [ ] Add mid-ocean ridge volcanism
+- [ ] **Convergent Boundaries**:
+  - [ ] Oceanic-Continental subduction
+  - [ ] Continental-Continental collision (mountain building)
+  - [ ] Volcanic arc formation above subduction zones
+- [ ] **Transform Boundaries**:
+  - [ ] Lateral movement without creation/destruction
+  - [ ] Stress accumulation for earthquakes
 
-4. **Volume Ray Marching** ✅
-   - [x] Proper ray marching through shells
-   - [x] Opacity accumulation
-   - [x] Early ray termination
-   - [x] Performance optimization (adjustable step size)
-   - [x] Toggle between surface/volume with 'V' key
+### Phase 3: Selective Virtual Voxel Integration
 
-5. **Visualization Modes** ✅ PARTIAL
-   - [x] Temperature view (color gradients)
-   - [x] Material type view
-   - [x] Basic velocity field (color mapped)
-   - [ ] Age visualization (not yet stored in voxels)
-   - [ ] Velocity arrows/streamlines
+#### 3.1 Feature Detection for Virtual Voxels
+- [ ] Identify where virtual voxels add value:
+  - [ ] High-stress plate boundaries
+  - [ ] Active volcanic regions
+  - [ ] Visible mountain peaks
+  - [ ] Areas near camera (LOD based)
+- [ ] Implement conversion thresholds
+- [ ] Add hysteresis to prevent oscillation
 
-6. **Cross-Section Views** ✅ PARTIAL
-   - [x] Axis-aligned cuts (X/Y/Z keys)
-   - [x] Works in both surface and volume modes
-   - [ ] Arbitrary plane cuts
-   - [ ] Dedicated interior structure view
+#### 3.2 Virtual Voxel Zones
+- [ ] Create specialized virtual voxel systems:
+  - [ ] `VirtualFaultSystem` for earthquake zones
+  - [ ] `VirtualVolcanoSystem` for eruptions
+  - [ ] `VirtualMountainSystem` for visible peaks
+- [ ] Each system optimized for its specific physics
+- [ ] Efficient GPU kernels for each type
 
-7. **Camera Improvements** 🚧 IN PROGRESS
-   - [x] Mouse rotation (drag to rotate)
-   - [x] Scroll to zoom
-   - [ ] Smooth transitions
-   - [ ] Focus on regions of interest
-   - [ ] Save/restore views
+#### 3.3 Grid-Virtual Interface
+- [ ] Seamless data exchange between grid and virtual
+- [ ] Virtual voxels read grid state as boundary conditions
+- [ ] Grid incorporates virtual voxel results
+- [ ] No visible seams or transitions
 
-#### 5.3 GPU Buffer Sharing ✅ COMPLETE
-- [x] Zero-copy between compute and render (persistent mapped buffers)
-- [x] Unified buffer management (WindowsGPUBufferManager)
-- [x] Synchronization primitives (memory barriers)
-- [x] Performance profiling (150+ FPS achieved)
+### Phase 4: Advanced Geological Features
 
-#### 5.4 Performance Optimization
-- [ ] Adaptive ray marching step size
-- [ ] Hierarchical voxel structure
-- [ ] Frustum culling
-- [ ] LOD system
+#### 4.1 Volcanic System
+- [ ] Magma chamber pressure tracking
+- [ ] Eruption triggering based on pressure/stress
+- [ ] Virtual voxel particle system for lava
+- [ ] Ash cloud generation (grid-based atmosphere)
+- [ ] New land formation from cooled lava
 
-### Phase 6: Visual Enhancement
+#### 4.2 Earthquake System
+- [ ] Stress accumulation along faults
+- [ ] Sudden release mechanics
+- [ ] Virtual voxel spring breaking for realistic motion
+- [ ] Seismic wave propagation through grid
+- [ ] Surface deformation and scarring
 
-#### 6.1 Advanced Rendering
-- [ ] Atmospheric scattering
-- [ ] Ocean rendering with waves
-- [ ] Cloud layers
-- [ ] Day/night cycle
-- [ ] Shadows and ambient occlusion
+#### 4.3 Erosion & Sedimentation
+- [ ] Height-based erosion on grid
+- [ ] River formation using flow accumulation
+- [ ] Sediment transport and deposition
+- [ ] Delta formation at river mouths
+- [ ] Integration with plate movement
 
-#### 6.2 Surface Details
-- [ ] Height displacement from voxel data
-- [ ] Normal mapping for terrain
-- [ ] Texture synthesis for materials
-- [ ] Vegetation placement
-
-#### 6.3 Special Effects
-- [ ] Volcanic eruptions
-- [ ] Earthquakes visualization
-- [ ] Continental drift trails
-- [ ] Plate boundary highlights
-
-### Phase 6.5: Proper Plate Tectonics 🚧 NEXT PRIORITY
-
-#### 6.5.1 Plate Motion Dynamics
-- [ ] Calculate plate velocities from mantle convection
-- [ ] Implement plate rotation and translation
-- [ ] Euler pole motion for realistic plate movement
-- [ ] Plate deformation and internal stress
-
-#### 6.5.2 Plate Boundary Interactions
-- [ ] Divergent boundaries (seafloor spreading)
-  - [ ] New oceanic crust generation
-  - [ ] Mid-ocean ridge volcanism
-  - [ ] Magnetic striping patterns
-- [ ] Convergent boundaries (collision/subduction)
-  - [ ] Oceanic-continental subduction
-  - [ ] Oceanic-oceanic subduction (island arcs)
-  - [ ] Continental-continental collision (mountain building)
-  - [ ] Volcanic arc formation
-  - [ ] Deep ocean trench formation
-- [ ] Transform boundaries
-  - [ ] Strike-slip motion
-  - [ ] Earthquake generation
-  - [ ] Offset features
-
-#### 6.5.3 Geological Processes
-- [ ] Crustal thickness variations
-  - [ ] Thickening at collision zones
-  - [ ] Thinning at rifts
-- [ ] Isostatic adjustment
-- [ ] Metamorphic processes in subduction zones
-- [ ] Partial melting and magma generation
-- [ ] Back-arc spreading
-
-#### 6.5.4 Material Evolution
-- [ ] Oceanic crust aging and cooling
-- [ ] Density changes with age
-- [ ] Sediment accumulation on ocean floor
-- [ ] Continental crust differentiation
-- [ ] Ophiolite formation
-
-#### 6.5.5 Mantle-Plate Coupling
-- [ ] Slab pull forces from subducting plates
-- [ ] Ridge push forces at spreading centers
-- [ ] Basal drag from mantle flow
-- [ ] Mantle plume interactions (hotspots)
-- [ ] Plate velocity feedback to mantle convection
-
-#### 6.5.6 GPU Implementation
-- [ ] Plate motion compute shaders
-- [ ] Boundary force calculation shaders
-- [ ] Stress accumulation and release
-- [ ] Material transformation shaders
-- [ ] Efficient neighbor queries for boundaries
-
-### Phase 7: Simulation Features
-
-#### 7.1 Surface Processes
-- [ ] Erosion visualization
-- [ ] Sediment transport
-- [ ] River formation
-- [ ] Glacier flow
-
-#### 7.2 Climate System
+#### 4.4 Climate & Atmosphere
+- [ ] Grid-based atmospheric simulation
 - [ ] Temperature distribution
 - [ ] Precipitation patterns
-- [ ] Ice cap formation
-- [ ] Seasonal variations
+- [ ] Cloud formation and movement
+- [ ] Ice cap growth/retreat
+- [ ] Weathering effects on rock
 
-#### 7.3 Time Controls
-- [ ] Variable simulation speed
-- [ ] Pause/resume
-- [ ] Reverse time
-- [ ] Keyframe system
+### Phase 5: Performance & Optimization
 
-### Phase 8: User Interface
+#### 5.1 LOD System
+- [ ] Distance-based detail reduction
+- [ ] Fewer physics updates for distant regions
+- [ ] Simplified rendering for far areas
+- [ ] Smooth LOD transitions
 
-#### 8.1 Immediate Controls
-- [ ] ImGui integration
-- [ ] Simulation parameters
-- [ ] Visualization toggles
-- [ ] Performance metrics
+#### 5.2 GPU Optimization
+- [ ] Optimize compute shader work groups
+- [ ] Implement GPU-based culling
+- [ ] Reduce memory bandwidth usage
+- [ ] Profile and eliminate bottlenecks
 
-#### 8.2 Data Analysis
-- [ ] Graphs and charts
-- [ ] Cross-section analysis
-- [ ] Material composition
-- [ ] Energy balance
+#### 5.3 Memory Management
+- [ ] Efficient buffer allocation
+- [ ] Streaming for very large planets
+- [ ] Compress inactive regions
+- [ ] Smart caching strategies
 
-#### 8.3 Import/Export
-- [ ] Save simulation state
-- [ ] Load checkpoints
-- [ ] Export visualizations
-- [ ] Generate reports
+### Phase 6: User Interface & Visualization
 
-### Phase 9: Advanced Features
+#### 6.1 Visualization Modes
+- [ ] Enhanced material view with textures
+- [ ] Temperature with heat flow arrows
+- [ ] Stress visualization for tectonics
+- [ ] Age-based coloring for crust
+- [ ] Velocity field streamlines
 
-#### 9.1 Multi-Scale
-- [ ] Adaptive voxel resolution
-- [ ] Regional zoom
-- [ ] Detail layers
-- [ ] Seamless transitions
+#### 6.2 Analysis Tools
+- [ ] Cross-section views at any angle
+- [ ] Time-lapse recording
+- [ ] Statistical overlays
+- [ ] Measurement tools
 
-#### 9.2 Exotic Planets
-- [ ] Different compositions
-- [ ] Variable gravity
-- [ ] Multiple stars
-- [ ] Tidal locking
+#### 6.3 Simulation Control
+- [ ] Time speed control with interpolation
+- [ ] Save/load simulation states
+- [ ] Parameter tuning interface
+- [ ] Preset scenarios
 
-#### 9.3 Catastrophic Events
-- [ ] Asteroid impacts
-- [ ] Supervolcanoes
-- [ ] Magnetic reversals
-- [ ] Solar flares
+## Implementation Priority
 
-### Phase 10: Polish & Release
+### Week 1: Enhanced Grid Foundation
+1. Sub-cell positioning system
+2. Smooth movement interpolation
+3. Cell transition handling
+4. Basic vertical movement
 
-#### 10.1 Stability
-- [ ] Comprehensive testing
-- [ ] Error handling
-- [ ] Crash recovery
-- [ ] Memory management
+### Week 2: Plate Dynamics
+1. Boundary detection
+2. Subduction mechanics
+3. Seafloor spreading
+4. Mountain building basics
 
-#### 10.2 Documentation
-- [ ] User manual
-- [ ] API documentation
-- [ ] Tutorial scenarios
-- [ ] Scientific validation
+### Week 3: Virtual Voxel Zones
+1. Fault line detection
+2. Selective virtual voxel creation
+3. Basic earthquake mechanics
+4. Volcanic vent system
 
-#### 10.3 Distribution
-- [ ] Cross-platform builds
-- [ ] Installation packages
-- [ ] Auto-updates
-- [ ] Community features
+### Week 4: Integration & Polish
+1. Performance optimization
+2. Visual improvements
+3. UI controls
+4. Testing & debugging
 
-## Next Steps (Prioritized)
+## Success Metrics
+- 15+ FPS with full geological simulation
+- Smooth continental drift without artifacts
+- Realistic plate interactions
+- Stable performance as features are added
+- Clean, maintainable code architecture
 
-1. **Proper Plate Tectonics** - Implement dynamic plate motion and interactions
-2. **Advanced Visual Effects** - Atmospheric scattering, ocean waves, clouds
-3. **User Interface** - ImGui integration for real-time parameter control
-4. **Surface Processes** - Erosion, sedimentation, river formation
-5. **Climate System** - Temperature distribution, ice caps, weather
+## Architecture Benefits
+- **Performance**: Grid handles 99% efficiently
+- **Quality**: Virtual voxels for complex deformation
+- **Scalability**: Easy to add new features
+- **Maintainability**: Clear separation of concerns
+- **Flexibility**: Can adjust virtual/grid ratio as needed
 
-## Technical Notes
-
-### Why This Order?
-1. **Foundation First**: Can't visualize without proper data access
-2. **Incremental Complexity**: Start with surface, add volume later
-3. **Visual Feedback**: Each step produces visible results
-4. **Performance Awareness**: Optimize as we go, not after
-5. **User Value**: Deliver useful features early
-
-### Current Implementation Notes
-- ✅ Both texture-based and SSBO-based rendering work
-- ✅ Volume rendering allows seeing inside the planet
-- ✅ Cross-sections work in all modes
-- ✅ Ocean/continent dithering fixed (see CLAUDE.md)
-- ✅ GPU compute shaders for physics (temperature diffusion, convection)
-- ✅ Persistent mapped buffers for zero-copy GPU operations
-- ✅ 150+ FPS performance achieved
-
-### Known Limitations
-- Age data not yet stored in voxels
-- Velocity visualization is basic (no arrows/streamlines)
-- Plate tectonics has no actual dynamics (static plates only)
-- No plate boundary interactions or geological processes
-
-### Performance Targets
-- 60+ FPS with full planet visualization
-- <16ms frame time with ray marching
-- Minimal CPU-GPU transfer
-- Real-time response to parameter changes
-
-## Controls
-
-### Rendering Modes
-- **V** - Toggle volume rendering (see inside the planet)
-- **S** - Toggle SSBO mode (alternative data access)
-- **1-4** - Visualization modes (material/temperature/velocity/age)
-
-### Cross-Sections
-- **X/Y/Z** - Toggle cross-section on respective axis
-
-### Volume Rendering
-- **+/-** - Adjust opacity (when in volume mode)
-- **[/]** - Adjust step size (quality vs performance)
-
-### Camera
-- **Mouse drag** - Rotate view
-- **Scroll** - Zoom in/out
-
-## Repository Structure
-```
-worldgenerator_go/
-├── main.go              # Entry point
-├── renderer_gl*.go      # OpenGL rendering (surface, volume, SSBO)
-├── gpu_*.go            # GPU compute (Metal/OpenCL/CUDA)
-├── voxel_*.go          # Voxel simulation
-├── build.sh            # Build script
-└── archive/            # Legacy web code
-```
+## Next Immediate Steps
+1. Create enhanced grid voxel structure with sub-positions
+2. Implement smooth movement accumulation
+3. Add vertical shell transitions
+4. Test with existing plate system
+5. Profile performance improvements

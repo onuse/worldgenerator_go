@@ -22,9 +22,10 @@ type VoxelRenderer struct {
 	window *glfw.Window
 
 	// Shader programs
-	rayMarchProgram uint32
-	ssboProgram     uint32 // SSBO-based ray marching
-	volumeProgram   uint32 // True volume ray marching
+	rayMarchProgram      uint32
+	ssboProgram          uint32 // SSBO-based ray marching
+	volumeProgram        uint32 // True volume ray marching
+	virtualVoxelProgram  uint32 // Direct virtual voxel rendering
 
 	// Test mode (can be removed after debugging)
 	currentTest int
@@ -74,6 +75,10 @@ type VoxelRenderer struct {
 	stepSize         float32
 	maxStepsVolume   int32
 	densityThreshold float32
+	
+	// Virtual voxel GPU system
+	virtualVoxelGPU *gpu.VirtualVoxelGPU
+	useVirtualVoxels bool
 
 	// Mouse state for camera control
 	MouseDown       bool
@@ -88,6 +93,10 @@ type VoxelRenderer struct {
 	// Stats overlay
 	statsOverlay *overlay.StatsOverlay
 	showStats    bool
+	
+	// Simulation control (public for main.go access)
+	SpeedMultiplier float32
+	Paused          bool
 }
 
 // NewVoxelRenderer creates a native OpenGL voxel renderer
@@ -141,6 +150,8 @@ func NewVoxelRenderer(width, height int) (*VoxelRenderer, error) {
 		maxStepsVolume:   400,
 		densityThreshold: 0.0,
 		showStats:        true, // Show stats overlay by default
+		SpeedMultiplier:  1.0,
+		Paused:           false,
 	}
 
 	// Setup OpenGL state
@@ -156,14 +167,15 @@ func NewVoxelRenderer(width, height int) (*VoxelRenderer, error) {
 	r.rayMarchProgram = program
 
 	// Try to create SSBO-based shader (optional)
-	ssboProgram, err := shaders.CreateSSBOProgram()
+	// Use V2 which properly handles longitude counts
+	ssboProgram, err := shaders.CreateSSBOProgramV2()
 	if err != nil {
-		fmt.Printf("Warning: Failed to create SSBO shader (OpenGL 4.3+ required): %v\n", err)
+		fmt.Printf("Warning: Failed to create SSBO V2 shader (OpenGL 4.3+ required): %v\n", err)
 		r.UseSSBO = false
 	} else {
 		r.ssboProgram = ssboProgram
 		r.UseSSBO = false // Disable SSBO until fixed
-		fmt.Println("✅ SSBO shaders compiled successfully")
+		fmt.Println("✅ SSBO V2 shaders compiled successfully (with proper longitude indexing)")
 	}
 
 	// Create volume ray marching shader
@@ -175,6 +187,15 @@ func NewVoxelRenderer(width, height int) (*VoxelRenderer, error) {
 		r.volumeProgram = volumeProgram
 		r.useVolume = false // Default to surface rendering
 		fmt.Println("✅ Volume ray marching shaders compiled successfully")
+	}
+	
+	// Create virtual voxel shader
+	virtualProgram, err := shaders.CreateVirtualVoxelProgram()
+	if err != nil {
+		fmt.Printf("Warning: Failed to create virtual voxel shader: %v\n", err)
+	} else {
+		r.virtualVoxelProgram = virtualProgram
+		fmt.Println("✅ Virtual voxel shaders compiled successfully")
 	}
 
 	// Create fullscreen quad for ray marching
@@ -470,7 +491,25 @@ func (r *VoxelRenderer) UpdateVoxelTextures(planet *core.VoxelPlanet) {
 
 // Render performs one frame of voxel rendering
 func (r *VoxelRenderer) Render() {
+	// Check for OpenGL errors
+	if err := gl.GetError(); err != gl.NO_ERROR {
+		fmt.Printf("OpenGL error before render: 0x%x\n", err)
+	}
+	
 	gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
+
+	// Check if we should use virtual voxel rendering
+	if r.useVirtualVoxels && r.virtualVoxelProgram != 0 && r.virtualVoxelGPU != nil {
+		r.renderVirtualVoxels()
+		
+		// Render stats overlay if enabled
+		if r.showStats && r.statsOverlay != nil {
+			r.statsOverlay.Render()
+		}
+		
+		r.window.SwapBuffers()
+		return
+	}
 
 	// Choose shader program based on mode
 	var program uint32
@@ -490,7 +529,13 @@ func (r *VoxelRenderer) Render() {
 	gl.UniformMatrix4fv(gl.GetUniformLocation(program, gl.Str("invViewProj\x00")), 1, false, &invViewProj[0])
 	gl.Uniform3fv(gl.GetUniformLocation(program, gl.Str("cameraPos\x00")), 1, &r.cameraPos[0])
 	gl.Uniform1f(gl.GetUniformLocation(program, gl.Str("planetRadius\x00")), r.planetRadius)
-	gl.Uniform1i(gl.GetUniformLocation(program, gl.Str("renderMode\x00")), r.RenderMode)
+	
+	// Debug render mode
+	renderModeLoc := gl.GetUniformLocation(program, gl.Str("renderMode\x00"))
+	if renderModeLoc < 0 {
+		fmt.Printf("WARNING: renderMode uniform not found in shader!\n")
+	}
+	gl.Uniform1i(renderModeLoc, int32(r.RenderMode))
 
 	// Cross-section uniforms
 	crossSectionInt := int32(0)
@@ -520,7 +565,12 @@ func (r *VoxelRenderer) Render() {
 	if r.UseSSBO && r.ssboProgram != 0 {
 		// SSBOs are already bound to binding points 0 and 1
 		// No additional binding needed here
+		// Check for OpenGL errors after uniforms
+		if err := gl.GetError(); err != gl.NO_ERROR {
+			fmt.Printf("OpenGL error after uniforms: 0x%x\n", err)
+		}
 	} else {
+		// Using texture mode
 		// Bind voxel textures for texture-based rendering
 		if r.voxelTextures != nil {
 			r.voxelTextures.Bind()
@@ -528,12 +578,30 @@ func (r *VoxelRenderer) Render() {
 			gl.Uniform1i(gl.GetUniformLocation(program, gl.Str("temperatureTexture\x00")), 1)
 			gl.Uniform1i(gl.GetUniformLocation(program, gl.Str("velocityTexture\x00")), 2)
 			gl.Uniform1i(gl.GetUniformLocation(program, gl.Str("shellInfoTexture\x00")), 3)
+		} else {
+			fmt.Printf("WARNING: voxelTextures is nil!\n")
 		}
 	}
 
 	// Draw fullscreen quad
 	gl.BindVertexArray(r.quadVAO)
 	gl.DrawArrays(gl.TRIANGLE_STRIP, 0, 4)
+	
+	// Check for errors after draw
+	if err := gl.GetError(); err != gl.NO_ERROR {
+		fmt.Printf("OpenGL error after draw: 0x%x\n", err)
+	}
+	
+	// Debug: Check if SSBOs are bound
+	if r.UseSSBO && r.ssboProgram != 0 {
+		var voxelSize, shellSize, lonSize int32
+		gl.GetNamedBufferParameteriv(r.voxelSSBO, gl.BUFFER_SIZE, &voxelSize)
+		gl.GetNamedBufferParameteriv(r.shellSSBO, gl.BUFFER_SIZE, &shellSize)
+		gl.GetNamedBufferParameteriv(r.lonCountSSBO, gl.BUFFER_SIZE, &lonSize)
+		if voxelSize == 0 || shellSize == 0 || lonSize == 0 {
+			fmt.Printf("ERROR: SSBO sizes - voxel:%d shell:%d lon:%d\n", voxelSize, shellSize, lonSize)
+		}
+	}
 
 	// Render stats overlay if enabled
 	if r.showStats {
@@ -591,23 +659,6 @@ func (r *VoxelRenderer) onKey(key glfw.Key, scancode int, action glfw.Action, mo
 		} else {
 			fmt.Println("Stats overlay: OFF")
 		}
-	case glfw.Key1:
-		r.RenderMode = 0 // Material
-		fmt.Println("Switched to material view")
-	case glfw.Key2:
-		r.RenderMode = 1 // Temperature
-		fmt.Println("Switched to temperature view")
-	case glfw.Key3:
-		r.RenderMode = 2 // Velocity
-		fmt.Println("Switched to velocity view")
-	case glfw.Key4:
-		r.RenderMode = 3 // Age
-		fmt.Println("Switched to age view")
-	case glfw.Key5:
-		r.RenderMode = 4 // Plates
-		r.ShowPlates = true
-		fmt.Println("Switched to plate tectonics view")
-		fmt.Println("Click on plates to see their information")
 	case glfw.KeyB:
 		// Toggle boundary highlighting
 		r.highlightBoundaries = !r.highlightBoundaries
@@ -681,6 +732,83 @@ func (r *VoxelRenderer) onKey(key glfw.Key, scancode int, action glfw.Action, mo
 				r.stepSize = 5.0
 			}
 			fmt.Printf("Volume step size: %.2f (larger = faster)\n", r.stepSize)
+		}
+	case glfw.Key0:
+		r.SpeedMultiplier = 1.0
+		fmt.Println("Time speed reset to 1x")
+	case glfw.Key1:
+		if mods&glfw.ModShift != 0 {
+			// Shift+1 = 10x speed
+			r.SpeedMultiplier = 10.0
+			fmt.Printf("Time speed: %.0fx\n", r.SpeedMultiplier)
+		} else {
+			// Normal 1 = material view
+			r.RenderMode = 0
+			fmt.Println("Switched to material view")
+		}
+	case glfw.Key2:
+		if mods&glfw.ModShift != 0 {
+			// Shift+2 = 100x speed
+			r.SpeedMultiplier = 100.0
+			fmt.Printf("Time speed: %.0fx\n", r.SpeedMultiplier)
+		} else {
+			// Normal 2 = temperature view
+			r.RenderMode = 1
+			fmt.Println("Switched to temperature view")
+		}
+	case glfw.Key3:
+		if mods&glfw.ModShift != 0 {
+			// Shift+3 = 1000x speed
+			r.SpeedMultiplier = 1000.0
+			fmt.Printf("Time speed: %.0fx\n", r.SpeedMultiplier)
+		} else {
+			// Normal 3 = velocity view
+			r.RenderMode = 2
+			fmt.Println("Switched to velocity view")
+		}
+	case glfw.Key4:
+		if mods&glfw.ModShift != 0 {
+			// Shift+4 = 10000x speed
+			r.SpeedMultiplier = 10000.0
+			fmt.Printf("Time speed: %.0fx\n", r.SpeedMultiplier)
+		} else {
+			// Normal 4 = age view
+			r.RenderMode = 3
+			fmt.Println("Switched to age view")
+		}
+	case glfw.Key5:
+		if mods&glfw.ModShift != 0 {
+			// Shift+5 = 100000x speed
+			r.SpeedMultiplier = 100000.0
+			fmt.Printf("Time speed: %.0fx (continents should move visibly!)\n", r.SpeedMultiplier)
+		} else {
+			// Normal 5 = plate view
+			r.RenderMode = 4
+			r.ShowPlates = true
+			fmt.Println("Switched to plate tectonics view")
+			fmt.Println("Click on plates to see their information")
+		}
+	case glfw.Key6:
+		// 6 = stress view
+		r.RenderMode = 5
+		fmt.Println("Switched to stress visualization")
+		fmt.Println("Red = high stress/velocity, Blue = low stress")
+	case glfw.Key7:
+		// 7 = sub-position view
+		r.RenderMode = 6
+		fmt.Println("Switched to sub-position visualization")
+		fmt.Println("Shows sub-cell positions: Red=lon, Green=lat, Blue=magnitude")
+	case glfw.Key8:
+		// 8 = elevation/altitude view
+		r.RenderMode = 7
+		fmt.Println("Switched to elevation visualization")
+		fmt.Println("Blue=ocean trenches, Green=lowlands, Yellow=highlands, Red=mountains, White=peaks")
+	case glfw.KeyP:
+		r.Paused = !r.Paused
+		if r.Paused {
+			fmt.Println("Simulation PAUSED")
+		} else {
+			fmt.Println("Simulation RESUMED")
 		}
 	}
 }
@@ -777,8 +905,98 @@ func (r *VoxelRenderer) PollEvents() {
 	glfw.PollEvents()
 }
 
+// InitializeVirtualVoxelGPU sets up GPU-accelerated virtual voxel system
+func (r *VoxelRenderer) InitializeVirtualVoxelGPU(planet *core.VoxelPlanet) error {
+	if planet.VirtualVoxelSystem == nil {
+		return fmt.Errorf("planet has no virtual voxel system")
+	}
+	
+	// Create GPU virtual voxel system
+	vvGPU, err := gpu.NewVirtualVoxelGPU(planet, planet.VirtualVoxelSystem)
+	if err != nil {
+		return fmt.Errorf("failed to create virtual voxel GPU: %v", err)
+	}
+	
+	r.virtualVoxelGPU = vvGPU
+	r.useVirtualVoxels = true
+	
+	// Mark the system as using GPU
+	planet.VirtualVoxelSystem.UseGPU = true
+	
+	fmt.Println("✅ Virtual voxel GPU system initialized")
+	return nil
+}
+
+// UpdateVirtualVoxels runs the virtual voxel physics on GPU
+func (r *VoxelRenderer) UpdateVirtualVoxels(dt float32) {
+	if r.virtualVoxelGPU == nil || !r.useVirtualVoxels {
+		return
+	}
+	
+	// Run physics compute shader
+	r.virtualVoxelGPU.UpdatePhysics(dt)
+	
+	// Skip grid mapping when rendering virtual voxels directly
+	// r.virtualVoxelGPU.MapToGrid()
+}
+
+// SetPlateVelocities updates plate motion data for virtual voxel physics
+func (r *VoxelRenderer) SetPlateVelocities(velocities map[int32][3]float32) {
+	if r.virtualVoxelGPU != nil {
+		r.virtualVoxelGPU.SetPlateVelocities(velocities)
+	}
+}
+
+// GetVirtualVoxelGridBuffer returns the GPU buffer containing mapped grid data
+func (r *VoxelRenderer) GetVirtualVoxelGridBuffer() uint32 {
+	if r.virtualVoxelGPU == nil {
+		return 0
+	}
+	// The grid buffer from virtual voxel system can be used directly by renderer
+	return r.virtualVoxelGPU.GetGridBuffer()
+}
+
+// IsUsingVirtualVoxels returns true if virtual voxel system is active
+func (r *VoxelRenderer) IsUsingVirtualVoxels() bool {
+	return r.useVirtualVoxels && r.virtualVoxelGPU != nil
+}
+
+// renderVirtualVoxels renders virtual voxels directly without grid mapping
+func (r *VoxelRenderer) renderVirtualVoxels() {
+	program := r.virtualVoxelProgram
+	gl.UseProgram(program)
+	
+	// Enable point sprites and depth testing
+	gl.Enable(gl.PROGRAM_POINT_SIZE)
+	gl.Enable(gl.DEPTH_TEST)
+	gl.Enable(gl.BLEND)
+	gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+	
+	// Set uniforms
+	gl.UniformMatrix4fv(gl.GetUniformLocation(program, gl.Str("viewMatrix\x00")), 1, false, &r.viewMatrix[0])
+	gl.UniformMatrix4fv(gl.GetUniformLocation(program, gl.Str("projMatrix\x00")), 1, false, &r.projMatrix[0])
+	gl.Uniform1f(gl.GetUniformLocation(program, gl.Str("planetRadius\x00")), r.planetRadius)
+	gl.Uniform1i(gl.GetUniformLocation(program, gl.Str("renderMode\x00")), int32(r.RenderMode))
+	gl.Uniform1f(gl.GetUniformLocation(program, gl.Str("pointSize\x00")), 50.0) // Adjust based on zoom
+	
+	// Bind virtual voxel buffer
+	voxelBuffer := r.virtualVoxelGPU.GetVoxelBuffer()
+	gl.BindBufferBase(gl.SHADER_STORAGE_BUFFER, 0, voxelBuffer)
+	
+	// Draw all virtual voxels as points
+	numVoxels := r.virtualVoxelGPU.GetNumVoxels()
+	gl.DrawArrays(gl.POINTS, 0, int32(numVoxels))
+	
+	// Cleanup
+	gl.Disable(gl.PROGRAM_POINT_SIZE)
+	gl.Disable(gl.BLEND)
+}
+
 // Terminate cleans up OpenGL resources
 func (r *VoxelRenderer) Terminate() {
+	if r.virtualVoxelGPU != nil {
+		r.virtualVoxelGPU.Release()
+	}
 	if r.voxelTextures != nil {
 		r.voxelTextures.Cleanup()
 	}

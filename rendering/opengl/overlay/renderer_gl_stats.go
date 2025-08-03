@@ -3,7 +3,6 @@ package overlay
 import (
 	"fmt"
 	"strings"
-	"unsafe"
 
 	"github.com/go-gl/gl/v4.3-core/gl"
 	"github.com/go-gl/mathgl/mgl32"
@@ -51,6 +50,9 @@ type StatsOverlay struct {
 	fps       float64
 	zoom      float64
 	distance  float32
+	
+	// Debug
+	renderCount int
 }
 
 // NewStatsOverlay creates a stats overlay renderer
@@ -96,12 +98,15 @@ func NewStatsOverlay(width, height int) (*StatsOverlay, error) {
 	gl.BindVertexArray(so.vao)
 	gl.BindBuffer(gl.ARRAY_BUFFER, so.vbo)
 	
+	// Each vertex has 6 floats: 2 for position, 4 for color
+	stride := int32(6 * 4) // 6 floats * 4 bytes per float
+	
 	// Position attribute (2 floats)
-	gl.VertexAttribPointer(0, 2, gl.FLOAT, false, 6*4, unsafe.Pointer(nil))
+	gl.VertexAttribPointer(0, 2, gl.FLOAT, false, stride, gl.PtrOffset(0))
 	gl.EnableVertexAttribArray(0)
 	
 	// Color attribute (4 floats)
-	gl.VertexAttribPointer(1, 4, gl.FLOAT, false, 6*4, unsafe.Pointer(uintptr(2*4)))
+	gl.VertexAttribPointer(1, 4, gl.FLOAT, false, stride, gl.PtrOffset(2*4))
 	gl.EnableVertexAttribArray(1)
 	
 	gl.BindVertexArray(0)
@@ -118,6 +123,16 @@ func (so *StatsOverlay) UpdateStats(fps float64, zoom float64, distance float32)
 
 // Render draws the stats overlay
 func (so *StatsOverlay) Render() {
+	// Debug: print once to confirm render is being called
+	if so.renderCount == 0 {
+		fmt.Println("DEBUG: StatsOverlay.Render() is being called!")
+		var viewport [4]int32
+		gl.GetIntegerv(gl.VIEWPORT, &viewport[0])
+		fmt.Printf("Viewport: %d,%d %dx%d\n", viewport[0], viewport[1], viewport[2], viewport[3])
+		fmt.Printf("Overlay size: %.0fx%.0f\n", so.width, so.height)
+	}
+	so.renderCount++
+	
 	// Save OpenGL state
 	gl.Disable(gl.DEPTH_TEST)
 	gl.Enable(gl.BLEND)
@@ -129,33 +144,52 @@ func (so *StatsOverlay) Render() {
 	
 	gl.UseProgram(so.program)
 	
+	// Check if program is valid
+	if so.program == 0 {
+		fmt.Println("ERROR: Overlay shader program is 0!")
+		return
+	}
+	
 	// Set orthographic projection
 	projection := mgl32.Ortho2D(0, so.width, so.height, 0)
 	projLoc := gl.GetUniformLocation(so.program, gl.Str("projection\x00"))
+	if projLoc == -1 {
+		fmt.Println("ERROR: Could not find 'projection' uniform!")
+	}
 	gl.UniformMatrix4fv(projLoc, 1, false, &projection[0])
 	
 	// Draw background box in top-left corner
 	boxX := float32(10)
 	boxY := float32(10) // Top left
-	boxW := float32(250)
-	boxH := float32(80)
+	boxW := float32(300)
+	boxH := float32(100)
 	
 	vertices := []float32{
 		// Position     Color (RGBA)
-		// Background box (semi-transparent dark blue/grey)
-		boxX,         boxY,         0.1, 0.1, 0.2, 0.8,
-		boxX + boxW,  boxY,         0.1, 0.1, 0.2, 0.8,
-		boxX,         boxY + boxH,  0.1, 0.1, 0.2, 0.8,
-		boxX + boxW,  boxY,         0.1, 0.1, 0.2, 0.8,
-		boxX + boxW,  boxY + boxH,  0.1, 0.1, 0.2, 0.8,
-		boxX,         boxY + boxH,  0.1, 0.1, 0.2, 0.8,
+		// Background box (bright red for debugging)
+		boxX,         boxY,         1.0, 0.0, 0.0, 1.0,
+		boxX + boxW,  boxY,         1.0, 0.0, 0.0, 1.0,
+		boxX,         boxY + boxH,  1.0, 0.0, 0.0, 1.0,
+		boxX + boxW,  boxY,         1.0, 0.0, 0.0, 1.0,
+		boxX + boxW,  boxY + boxH,  1.0, 0.0, 0.0, 1.0,
+		boxX,         boxY + boxH,  1.0, 0.0, 0.0, 1.0,
 	}
 	
 	gl.BindVertexArray(so.vao)
 	gl.BindBuffer(gl.ARRAY_BUFFER, so.vbo)
 	gl.BufferData(gl.ARRAY_BUFFER, len(vertices)*4, gl.Ptr(vertices), gl.DYNAMIC_DRAW)
 	
+	// Check for GL errors before draw
+	if err := gl.GetError(); err != gl.NO_ERROR {
+		fmt.Printf("GL Error before draw: 0x%x\n", err)
+	}
+	
 	gl.DrawArrays(gl.TRIANGLES, 0, 6)
+	
+	// Check for GL errors after draw
+	if err := gl.GetError(); err != gl.NO_ERROR {
+		fmt.Printf("GL Error after draw: 0x%x\n", err)
+	}
 	
 	// Draw text lines as colored bars (simple visualization)
 	// In a real implementation, you'd render actual text

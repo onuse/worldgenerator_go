@@ -1,0 +1,152 @@
+#version 430 core
+
+// Virtual Voxel Physics Compute Shader
+// Handles spring physics and position updates for millions of voxels in parallel
+
+// Work group size - tune for GPU architecture
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+// Virtual voxel structure
+struct VirtualVoxel {
+    vec3 position;      // Spherical coords: r, theta, phi
+    float mass;
+    vec3 velocity;      // Spherical velocity components
+    float temperature;
+    vec3 force;         // Accumulated forces this frame
+    int plateID;
+    int material;       // Material type
+    int bondOffset;     // Index into bonds array
+    int bondCount;      // Number of bonds
+    float padding;      // Align to 64 bytes
+};
+
+// Bond structure
+struct VoxelBond {
+    int targetID;       // ID of connected voxel
+    float restLength;   // Natural separation
+    float stiffness;    // Spring constant
+    float strength;     // 0-1, can break under stress
+};
+
+// Plate motion
+struct PlateMotion {
+    vec3 angularVelocity;  // Euler pole rotation
+    float padding;
+};
+
+// SSBOs for data
+layout(std430, binding = 0) buffer VoxelBuffer {
+    VirtualVoxel voxels[];
+};
+
+layout(std430, binding = 1) buffer BondBuffer {
+    VoxelBond bonds[];
+};
+
+layout(std430, binding = 2) buffer PlateBuffer {
+    PlateMotion plates[];
+};
+
+// Uniforms
+uniform float deltaTime;
+uniform float planetRadius;
+uniform int numVoxels;
+
+// Calculate angular distance between two spherical positions
+float angularDistance(vec3 pos1, vec3 pos2) {
+    // Haversine formula
+    float dTheta = pos2.y - pos1.y;
+    float dPhi = pos2.z - pos1.z;
+    
+    float a = sin(dTheta/2) * sin(dTheta/2) +
+              cos(pos1.y) * cos(pos2.y) * sin(dPhi/2) * sin(dPhi/2);
+    
+    return 2.0 * atan(sqrt(a), sqrt(1-a));
+}
+
+// Calculate spring force between two voxels
+vec3 calculateSpringForce(VirtualVoxel v1, VirtualVoxel v2, float restLength, float stiffness) {
+    // Get angular distance
+    float dist = angularDistance(v1.position, v2.position);
+    
+    if (dist < 0.0001) return vec3(0.0); // Too close, avoid division by zero
+    
+    // Spring force magnitude: F = -k * (x - rest_length)
+    float forceMag = stiffness * (dist - restLength);
+    
+    // Direction from v1 to v2 in spherical coordinates
+    vec3 direction = normalize(v2.position - v1.position);
+    
+    return forceMag * direction;
+}
+
+// Convert plate angular velocity to local velocity
+vec3 plateVelocityAtPosition(vec3 pos, PlateMotion plate) {
+    // Simplified - in reality this involves cross product with position vector
+    // For now, just apply angular velocity components
+    return plate.angularVelocity * planetRadius;
+}
+
+void main() {
+    uint id = gl_GlobalInvocationID.x;
+    if (id >= numVoxels) return;
+    
+    VirtualVoxel voxel = voxels[id];
+    
+    // Clear forces
+    voxel.force = vec3(0.0);
+    
+    // Calculate spring forces from bonds
+    for (int i = 0; i < voxel.bondCount; i++) {
+        int bondIdx = voxel.bondOffset + i;
+        VoxelBond bond = bonds[bondIdx];
+        
+        if (bond.strength <= 0.0) continue; // Broken bond
+        
+        VirtualVoxel target = voxels[bond.targetID];
+        
+        // Calculate spring force
+        vec3 springForce = calculateSpringForce(voxel, target, bond.restLength, bond.stiffness);
+        voxel.force += springForce;
+        
+        // Check if bond should break
+        float currentDist = angularDistance(voxel.position, target.position);
+        float strain = abs(currentDist - bond.restLength) / bond.restLength;
+        
+        if (strain > bond.strength) {
+            bonds[bondIdx].strength = 0.0; // Break the bond
+        }
+    }
+    
+    // Add plate motion force
+    if (voxel.plateID > 0) {
+        PlateMotion plate = plates[voxel.plateID - 1];
+        vec3 targetVel = plateVelocityAtPosition(voxel.position, plate);
+        
+        // Strong force to maintain plate velocity
+        vec3 plateForce = (targetVel - voxel.velocity) * 50.0;
+        voxel.force += plateForce;
+    }
+    
+    // Add damping
+    voxel.force -= voxel.velocity * 2.0;
+    
+    // Update velocity (F = ma, so a = F/m)
+    voxel.velocity += voxel.force / voxel.mass * deltaTime;
+    
+    // Update position
+    voxel.position += voxel.velocity * deltaTime;
+    
+    // Wrap longitude
+    if (voxel.position.z > 3.14159265) {
+        voxel.position.z -= 2.0 * 3.14159265;
+    } else if (voxel.position.z < -3.14159265) {
+        voxel.position.z += 2.0 * 3.14159265;
+    }
+    
+    // Clamp latitude
+    voxel.position.y = clamp(voxel.position.y, -1.5707963, 1.5707963); // ±π/2
+    
+    // Write back
+    voxels[id] = voxel;
+}

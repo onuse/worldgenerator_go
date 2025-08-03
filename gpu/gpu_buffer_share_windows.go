@@ -227,6 +227,7 @@ func (mgr *WindowsGPUBufferManager) updateShellMetadata(planet *core.VoxelPlanet
 // SyncToGPU uploads any dirty data to GPU
 func (mgr *WindowsGPUBufferManager) SyncToGPU() {
 	if !mgr.UsePersistent && mgr.voxelsDirty {
+		// GPU sync completed
 		// Upload voxel data using buffer orphaning for efficiency
 		gl.BindBuffer(gl.SHADER_STORAGE_BUFFER, mgr.voxelSSBO)
 		voxelSize := mgr.totalVoxels * int(unsafe.Sizeof(GPUVoxelMaterial{}))

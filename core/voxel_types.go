@@ -53,6 +53,30 @@ type VoxelMaterial struct {
 	YieldStrength float32 // Pa - stress needed to deform/break
 	IsBrittle     bool    // True if brittle (fractures), false if ductile (flows)
 	IsFractured   bool    // True if recently fractured
+	
+	// Plate tracking and movement
+	PlateID       int32   // Which tectonic plate this voxel belongs to
+	
+	// Sub-cell positioning for smooth movement
+	SubPosLat     float32 // Position within cell [0,1) in latitude direction
+	SubPosLon     float32 // Position within cell [0,1) in longitude direction
+	SubPosR       float32 // Position within shell [0,1) for vertical movement
+	
+	// Elevation tracking
+	Elevation     float32 // Height above/below mean radius in meters (positive = mountains, negative = trenches)
+	
+	// Melting state
+	MeltFraction  float32 // Fraction of material that is molten (0-1)
+	
+	// Movement accumulation (for backward compatibility)
+	FracLon       float32 // Accumulated fractional longitude movement
+	FracLat       float32 // Accumulated fractional latitude movement  
+	LastMoveTime  float32 // Simulation time when last moved (prevents double moves)
+	
+	// Continuity tracking
+	IsTransient   bool    // Created to fill gaps in plate
+	SourcePlateID int32   // Original plate (for transient voxels)
+	StretchFactor float32 // How much this voxel is stretched (1.0 = normal)
 }
 
 // VoxelCoord represents a position in the spherical voxel grid
@@ -96,6 +120,15 @@ type VoxelPlanet struct {
 	
 	// Physics subsystems (created on demand)
 	Physics interface{} // *physics.VoxelPhysics but avoid import cycle
+	
+	// Virtual voxel system (optional)
+	VirtualVoxelSystem *VirtualVoxelSystem
+	UseVirtualVoxels   bool
+	
+	// Global conservation tracking
+	TotalWaterVolume   float64 // Total water volume on planet (m³)
+	TotalRockVolume    float64 // Total rock volume (for mass conservation)
+	SeaLevel           float64 // Current sea level elevation (m)
 }
 
 // TriangleMesh for rendering

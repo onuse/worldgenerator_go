@@ -1,0 +1,148 @@
+#version 430 core
+
+// Virtual Voxel to Grid Mapping Compute Shader
+// Maps continuous virtual voxel positions to discrete grid cells
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+// Virtual voxel structure (simplified for mapping)
+struct VirtualVoxel {
+    vec3 position;      // Spherical coords: r, theta, phi
+    float mass;
+    vec3 velocity;      
+    float temperature;
+    vec3 force;         
+    int plateID;
+    int material;       
+    int bondOffset;     
+    int bondCount;      
+    float padding;
+};
+
+// Grid voxel structure
+struct GridVoxel {
+    int material;
+    float density;
+    float temperature;
+    float pressure;
+    vec3 velocity;
+    float age;
+    float stress;
+    float composition;
+    int plateID;
+};
+
+// SSBOs
+layout(std430, binding = 0) buffer VirtualVoxelBuffer {
+    VirtualVoxel virtualVoxels[];
+};
+
+layout(std430, binding = 1) buffer GridBuffer {
+    GridVoxel gridVoxels[];
+};
+
+layout(std430, binding = 2) buffer WeightBuffer {
+    float gridWeights[];  // Accumulation buffer for blending
+};
+
+// Shell metadata
+uniform int shellIndex;
+uniform int latBands;
+uniform int numVirtualVoxels;
+uniform float innerRadius;
+uniform float outerRadius;
+
+// Get longitude count for a latitude band (equal-area division)
+int getLonCount(int latIndex) {
+    float lat = (float(latIndex) + 0.5) / float(latBands) * 180.0 - 90.0;
+    float latRad = lat * 3.14159265359 / 180.0;
+    int baseLonDivisions = latBands * 2;
+    int lonCount = int(float(baseLonDivisions) * cos(latRad));
+    return max(lonCount, 4);
+}
+
+// Get grid index from lat/lon indices
+int getGridIndex(int latIdx, int lonIdx) {
+    int index = 0;
+    // Sum all voxels in previous latitude bands
+    for (int i = 0; i < latIdx; i++) {
+        index += getLonCount(i);
+    }
+    // Add longitude offset in current band
+    index += lonIdx;
+    return index;
+}
+
+void main() {
+    ivec2 coord = ivec2(gl_GlobalInvocationID.xy);
+    int latIdx = coord.x;
+    int lonIdx = coord.y;
+    
+    if (latIdx >= latBands) return;
+    
+    int lonCount = getLonCount(latIdx);
+    if (lonIdx >= lonCount) return;
+    
+    int gridIdx = getGridIndex(latIdx, lonIdx);
+    
+    // Clear grid cell first
+    gridVoxels[gridIdx].material = 0; // Water
+    gridVoxels[gridIdx].density = 1000.0;
+    gridVoxels[gridIdx].temperature = 288.15;
+    gridVoxels[gridIdx].velocity = vec3(0.0);
+    gridVoxels[gridIdx].plateID = 0;
+    gridVoxels[gridIdx].stress = 0.0;
+    gridWeights[gridIdx] = 0.0;
+    
+    // Convert grid position to spherical coordinates
+    float gridLat = (float(latIdx) + 0.5) / float(latBands) * 3.14159265359 - 1.5707963;
+    float gridLon = (float(lonIdx) + 0.5) / float(lonCount) * 2.0 * 3.14159265359 - 3.14159265359;
+    
+    // Check all virtual voxels for influence on this grid cell
+    for (int i = 0; i < numVirtualVoxels; i++) {
+        VirtualVoxel vv = virtualVoxels[i];
+        
+        // Check if virtual voxel is in this shell
+        float shellMid = (innerRadius + outerRadius) / 2.0;
+        if (abs(vv.position.x - shellMid) > (outerRadius - innerRadius)) continue;
+        
+        // Calculate distance to grid cell center
+        float dLat = vv.position.y - gridLat;
+        float dLon = vv.position.z - gridLon;
+        
+        // Handle longitude wrapping
+        if (dLon > 3.14159265359) dLon -= 2.0 * 3.14159265359;
+        if (dLon < -3.14159265359) dLon += 2.0 * 3.14159265359;
+        
+        // Distance in grid cells
+        float latDist = abs(dLat) * float(latBands) / 3.14159265359;
+        float lonDist = abs(dLon) * float(lonCount) / (2.0 * 3.14159265359);
+        
+        // Bilinear weight function
+        if (latDist < 1.0 && lonDist < 1.0) {
+            float weight = (1.0 - latDist) * (1.0 - lonDist);
+            
+            if (weight > 0.1) { // Threshold to avoid too much spreading
+                // Accumulate properties weighted by influence
+                if (vv.material > 0) { // Land
+                    gridVoxels[gridIdx].material = vv.material;
+                    gridVoxels[gridIdx].density = 2700.0; // Granite density
+                    gridVoxels[gridIdx].temperature = vv.temperature;
+                    gridVoxels[gridIdx].velocity = vv.velocity;
+                    gridVoxels[gridIdx].plateID = vv.plateID;
+                    
+                    // Accumulate stress from bonds
+                    float bondStress = length(vv.force) / vv.mass;
+                    gridVoxels[gridIdx].stress += bondStress * weight;
+                    
+                    gridWeights[gridIdx] += weight;
+                }
+            }
+        }
+    }
+    
+    // Normalize accumulated values
+    if (gridWeights[gridIdx] > 0.0) {
+        gridVoxels[gridIdx].stress /= gridWeights[gridIdx];
+    }
+}

@@ -3,6 +3,7 @@ package core
 import (
 	"fmt"
 	"math"
+	"math/rand"
 )
 
 // CreateVoxelPlanet initializes a new voxel-based planet
@@ -52,7 +53,12 @@ func CreateVoxelPlanet(radius float64, shellCount int) *VoxelPlanet {
 	// Initialize material composition
 	initializePlanetComposition(planet)
 	
+	// Initialize water conservation tracking
+	planet.SeaLevel = 0 // Start at 0m elevation
+	planet.TotalWaterVolume = planet.CalculateTotalWaterVolume()
+	
 	fmt.Printf("Created voxel planet: radius=%.0fm, shells=%d\n", radius, shellCount)
+	fmt.Printf("Initial water volume: %.2e m³\n", planet.TotalWaterVolume)
 	for i, shell := range planet.Shells {
 		totalVoxels := 0
 		for _, count := range shell.LonCounts {
@@ -85,10 +91,12 @@ func createSphericalShell(inner, outer float64, latBands int, shellIndex, totalS
 		// Initialize empty voxels
 		for lon := 0; lon < lonCount; lon++ {
 			shell.Voxels[lat][lon] = VoxelMaterial{
-				Type:        MatAir,
-				Density:     MaterialProperties[MatAir].DefaultDensity,
-				Temperature: 288.15, // 15°C default
-				Pressure:    101325, // 1 atm
+				Type:          MatAir,
+				Density:       MaterialProperties[MatAir].DefaultDensity,
+				Temperature:   288.15, // 15°C default
+				Pressure:      101325, // 1 atm
+				StretchFactor: 1.0,   // Normal, not stretched
+				PlateID:       0,     // Not part of any plate initially
 			}
 		}
 	}
@@ -183,6 +191,13 @@ func initializePlanetComposition(planet *VoxelPlanet) {
 						voxel.Age = float32(50000000 * (1 + math.Cos(ageBand))) // 0-100My in bands
 					}
 					voxel.Temperature = 1000 - float32(700*(avgRadius-earthRadius*0.85)/(earthRadius*0.14))
+					
+					// Mark crustal rocks as brittle for plate tectonics
+					voxel.IsBrittle = true
+					
+					// Add initial plate velocities (simple eastward drift)
+					// This gives plates something to work with initially
+					voxel.VelPhi = 1e-9 * float32(1 + 0.5*math.Sin(lat*0.1)) // ~3 cm/year at equator
 				} else if shellIdx == len(planet.Shells)-2 {
 					// Surface shell - recalculate continentalness here
 					lat := getLatitudeForBand(latIdx, shell.LatBands)
@@ -214,9 +229,28 @@ func initializePlanetComposition(planet *VoxelPlanet) {
 					if isLand {
 						voxel.Type = MatGranite
 						voxel.Density = MaterialProperties[MatGranite].DefaultDensity
+						voxel.IsBrittle = true
+						voxel.VelPhi = 1e-9 * float32(1 + 0.5*math.Sin(lat*0.1))
+						
+						// Add initial elevation variation based on simple patterns
+						// Use lat/lon to create mountain ranges
+						mountainNoise := math.Sin(lat*0.1) * math.Cos(lon*0.05)
+						baseElevation := float32(500) // Base continental elevation
+						
+						// Add mountain ranges
+						if mountainNoise > 0.7 {
+							voxel.Elevation = baseElevation + float32(1000 + rand.Float64()*2000) // 1.5-3.5km mountains
+						} else if mountainNoise > 0.3 {
+							voxel.Elevation = baseElevation + float32(200 + rand.Float64()*800) // 0.7-1.3km highlands
+						} else {
+							voxel.Elevation = baseElevation + float32(rand.Float64()*200 - 100) // 0.4-0.6km lowlands
+						}
 					} else {
 						voxel.Type = MatWater
 						voxel.Density = MaterialProperties[MatWater].DefaultDensity
+						// Ocean depth based on distance from continents
+						oceanDepth := float32(-1000 - rand.Float64()*3000) // -1 to -4km
+						voxel.Elevation = oceanDepth
 					}
 					voxel.Temperature = 288.15 - float32(math.Abs(lat)*0.5)
 				} else {
@@ -299,4 +333,131 @@ func (p *VoxelPlanet) MarkCellActive(coord VoxelCoord) {
 // ClearActiveCells resets the active cell list
 func (p *VoxelPlanet) ClearActiveCells() {
 	p.ActiveCells = make(map[VoxelCoord]bool)
+}
+
+// CalculateTotalWaterVolume computes the total water volume on the planet
+func (p *VoxelPlanet) CalculateTotalWaterVolume() float64 {
+	totalVolume := 0.0
+	
+	// Only check surface shell for water
+	if len(p.Shells) < 2 {
+		return 0
+	}
+	
+	surfaceShell := len(p.Shells) - 2
+	shell := &p.Shells[surfaceShell]
+	
+	for latIdx := range shell.Voxels {
+		lat := getLatitudeForBand(latIdx, shell.LatBands)
+		latRad := lat * math.Pi / 180.0
+		
+		for lonIdx := range shell.Voxels[latIdx] {
+			voxel := &shell.Voxels[latIdx][lonIdx]
+			
+			if voxel.Type == MatWater {
+				// Calculate voxel volume considering spherical geometry
+				// Volume = r²Δr × ΔθΔφ × sin(θ)
+				r := (shell.InnerRadius + shell.OuterRadius) / 2
+				dr := shell.OuterRadius - shell.InnerRadius
+				dTheta := math.Pi / float64(shell.LatBands)
+				dPhi := 2 * math.Pi / float64(shell.LonCounts[latIdx])
+				
+				// Volume in m³
+				volume := r * r * dr * dTheta * dPhi * math.Abs(math.Cos(latRad))
+				
+				// Consider water depth (elevation below sea level)
+				if voxel.Elevation < 0 {
+					// Water column height = sea level - ocean floor
+					waterDepth := p.SeaLevel - float64(voxel.Elevation)
+					// Adjust volume based on actual water depth vs shell thickness
+					depthRatio := waterDepth / dr
+					if depthRatio > 1 {
+						depthRatio = 1 // Cap at shell thickness
+					}
+					volume *= depthRatio
+				}
+				
+				totalVolume += volume
+			}
+		}
+	}
+	
+	return totalVolume
+}
+
+// UpdateSeaLevel recalculates sea level to maintain constant water volume
+func (p *VoxelPlanet) UpdateSeaLevel() {
+	if p.TotalWaterVolume <= 0 {
+		// Initialize on first call
+		p.TotalWaterVolume = p.CalculateTotalWaterVolume()
+		p.SeaLevel = 0 // Initial sea level at 0m
+		return
+	}
+	
+	// Binary search for the sea level that gives us the target water volume
+	minLevel := -5000.0 // Deepest ocean
+	maxLevel := 1000.0   // Potential high sea level
+	tolerance := 1.0     // 1 meter tolerance
+	
+	for maxLevel-minLevel > tolerance {
+		testLevel := (minLevel + maxLevel) / 2
+		p.SeaLevel = testLevel
+		
+		// Calculate volume at this sea level
+		currentVolume := p.CalculateWaterVolumeAtSeaLevel(testLevel)
+		
+		if currentVolume < p.TotalWaterVolume {
+			// Need higher sea level
+			minLevel = testLevel
+		} else {
+			// Need lower sea level
+			maxLevel = testLevel
+		}
+	}
+	
+	p.SeaLevel = (minLevel + maxLevel) / 2
+}
+
+// CalculateWaterVolumeAtSeaLevel calculates water volume if sea level was at given elevation
+func (p *VoxelPlanet) CalculateWaterVolumeAtSeaLevel(seaLevel float64) float64 {
+	totalVolume := 0.0
+	
+	if len(p.Shells) < 2 {
+		return 0
+	}
+	
+	surfaceShell := len(p.Shells) - 2
+	shell := &p.Shells[surfaceShell]
+	
+	for latIdx := range shell.Voxels {
+		lat := getLatitudeForBand(latIdx, shell.LatBands)
+		latRad := lat * math.Pi / 180.0
+		
+		for lonIdx := range shell.Voxels[latIdx] {
+			voxel := &shell.Voxels[latIdx][lonIdx]
+			
+			// Any voxel below sea level contributes to water volume
+			if float64(voxel.Elevation) < seaLevel {
+				r := (shell.InnerRadius + shell.OuterRadius) / 2
+				dr := shell.OuterRadius - shell.InnerRadius
+				dTheta := math.Pi / float64(shell.LatBands)
+				dPhi := 2 * math.Pi / float64(shell.LonCounts[latIdx])
+				
+				// Base voxel volume
+				volume := r * r * dr * dTheta * dPhi * math.Abs(math.Cos(latRad))
+				
+				// Water depth at this location
+				waterDepth := seaLevel - float64(voxel.Elevation)
+				depthRatio := waterDepth / dr
+				if depthRatio > 1 {
+					depthRatio = 1
+				}
+				volume *= depthRatio
+				
+				totalVolume += volume
+			}
+		}
+	}
+	
+	return totalVolume
 }

@@ -138,6 +138,13 @@ func (pm *PlateManager) createPlateFromSeed(seed core.VoxelCoord, visited map[co
 		// Add to plate
 		plate.MemberVoxels = append(plate.MemberVoxels, current)
 		pm.VoxelPlateMap[current] = plate.ID
+		
+		// Set PlateID in the actual voxel
+		if current.Shell < len(pm.planet.Shells) && 
+		   current.Lat < len(pm.planet.Shells[current.Shell].Voxels) &&
+		   current.Lon < len(pm.planet.Shells[current.Shell].Voxels[current.Lat]) {
+			pm.planet.Shells[current.Shell].Voxels[current.Lat][current.Lon].PlateID = int32(plate.ID)
+		}
 
 		// Check neighbors
 		neighbors := pm.getNeighborCoords(current)
@@ -371,6 +378,26 @@ func (pm *PlateManager) updatePlateVelocity(plate *TectonicPlate, dt float64) {
 
 	// Update Euler pole position based on torques
 	// Simplified - in reality poles migrate slowly
+}
+
+// GetPlateVelocities returns angular velocities for all plates
+func (pm *PlateManager) GetPlateVelocities() map[int32][3]float32 {
+	velocities := make(map[int32][3]float32)
+	
+	for _, plate := range pm.Plates {
+		// Convert Euler pole to radians
+		poleLat := plate.EulerPoleLat * math.Pi / 180.0
+		poleLon := plate.EulerPoleLon * math.Pi / 180.0
+		
+		// Euler pole unit vector * angular velocity
+		poleX := float32(math.Cos(poleLat) * math.Cos(poleLon) * plate.AngularVelocity)
+		poleY := float32(math.Cos(poleLat) * math.Sin(poleLon) * plate.AngularVelocity)
+		poleZ := float32(math.Sin(poleLat) * plate.AngularVelocity)
+		
+		velocities[int32(plate.ID)] = [3]float32{poleX, poleY, poleZ}
+	}
+	
+	return velocities
 }
 
 // applyPlateMotion applies rigid body rotation to all voxels in the plate
