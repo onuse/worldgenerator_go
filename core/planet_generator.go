@@ -84,6 +84,25 @@ func generateRandomContinents(planet *VoxelPlanet, rng *rand.Rand, params Planet
 		}
 	}
 
+	// First, clear all existing surface material to ensure clean generation
+	for latIdx, latBand := range shell.Voxels {
+		for lonIdx := range latBand {
+			voxel := &shell.Voxels[latIdx][lonIdx]
+			// Reset to default ocean state
+			voxel.Type = MatWater
+			voxel.Density = MaterialProperties[MatWater].DefaultDensity
+			voxel.Temperature = 288.15 // Default ocean temperature
+			voxel.Elevation = -1000    // Default ocean depth
+			voxel.Age = 0
+			voxel.PlateID = 0
+			voxel.IsBrittle = false
+			// Clear any velocities from previous initialization
+			voxel.VelNorth = 0
+			voxel.VelEast = 0
+			voxel.VelR = 0
+		}
+	}
+
 	// Fill in the voxels based on continent seeds
 	for latIdx, latBand := range shell.Voxels {
 		lat := GetLatitudeForBand(latIdx, shell.LatBands)
@@ -131,9 +150,33 @@ func generateRandomContinents(planet *VoxelPlanet, rng *rand.Rand, params Planet
 					ageFactor = 0
 				}
 				voxel.Age = float32(50000000 + 150000000*ageFactor) // 50-200 My
+
+				// Elevation based on distance from edge
+				// Find distance to nearest continent edge
+				edgeDistance := math.MaxFloat64
+				for _, seed := range seeds {
+					dist := angularDistance(lat, lon, seed.lat, seed.lon)
+					edgeDist := seed.radius - dist
+					if edgeDist < edgeDistance && edgeDist > 0 {
+						edgeDistance = edgeDist
+					}
+				}
+				
+				// Create elevation gradient from coast to interior
+				if edgeDistance < 5.0 { // Within 5 degrees of coast
+					// Coastal lowlands with smooth transition
+					coastFactor := edgeDistance / 5.0
+					voxel.Elevation = float32(coastFactor * 500.0) // 0-500m coastal plain
+				} else {
+					// Interior with varied elevation
+					voxel.Elevation = 500 + float32(rng.Float64()*1000) // 500-1500m interior
+				}
 			} else {
 				voxel.Type = MatWater
 				voxel.Density = MaterialProperties[MatWater].DefaultDensity
+				// Ocean depth gradient based on distance from land
+				oceanDepth := float32(-1000 - rng.Float64()*3000) // -1 to -4km
+				voxel.Elevation = oceanDepth
 			}
 
 			// Set temperature
