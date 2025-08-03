@@ -49,6 +49,7 @@ func NewVoxelPhysics(planet *core.VoxelPlanet) *VoxelPhysics {
 
 	// Identify initial plates
 	vp.plates.IdentifyPlates()
+	fmt.Printf("Identified %d tectonic plates\n", len(vp.plates.Plates))
 
 	// Try to initialize GPU acceleration
 	if gpuCompute, err := gpu.NewMetalCompute(planet); err == nil {

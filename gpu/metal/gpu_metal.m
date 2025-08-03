@@ -22,7 +22,7 @@ typedef struct {
     float density;
     float temperature;
     float pressure;
-    float velR, velTheta, velPhi;
+    float velR, VelNorth, VelEast;
     float age;
     float stress;
     float composition;

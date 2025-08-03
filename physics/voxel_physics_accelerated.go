@@ -61,19 +61,19 @@ func ApplyAcceleratedPlateMotion(planet *core.VoxelPlanet, dt float64, params *A
 				baseVel := float32(3e-9) // 3 cm/year
 				if voxel.Type == core.MatGranite {
 					// Continental plates move a bit slower
-					voxel.VelPhi = baseVel * float32(params.PlateVelocityMultiplier) * (0.5 + 0.5*float32(lonIdx%3))
-					voxel.VelTheta = baseVel * float32(params.PlateVelocityMultiplier) * 0.2 * (1.0 - 2.0*float32(latIdx%2))
+					voxel.VelEast = baseVel * float32(params.PlateVelocityMultiplier) * (0.5 + 0.5*float32(lonIdx%3))
+					voxel.VelNorth = baseVel * float32(params.PlateVelocityMultiplier) * 0.2 * (1.0 - 2.0*float32(latIdx%2))
 				} else if voxel.Type == core.MatBasalt {
 					// Oceanic plates can move faster
-					voxel.VelPhi = baseVel * float32(params.PlateVelocityMultiplier) * (0.8 + 0.4*float32(lonIdx%5)/5.0)
-					voxel.VelTheta = baseVel * float32(params.PlateVelocityMultiplier) * 0.3 * (1.0 - 2.0*float32(latIdx%3)/3.0)
+					voxel.VelEast = baseVel * float32(params.PlateVelocityMultiplier) * (0.8 + 0.4*float32(lonIdx%5)/5.0)
+					voxel.VelNorth = baseVel * float32(params.PlateVelocityMultiplier) * 0.3 * (1.0 - 2.0*float32(latIdx%3)/3.0)
 				}
 
 				// For future use: calculate actual displacement
 				// lat := core.GetLatitudeForBand(latIdx, shell.LatBands)
 				// radius := (shell.InnerRadius + shell.OuterRadius) / 2
 				// degPerMeter := 360.0 / (2.0 * math.Pi * radius)
-				// lonDisplacement := float64(voxel.VelPhi) * dt * degPerMeter / math.Cos(lat*math.Pi/180.0)
+				// lonDisplacement := float64(voxel.VelEast) * dt * degPerMeter / math.Cos(lat*math.Pi/180.0)
 
 				// Add visible deformation at plate boundaries
 				if voxel.Stress > 1e6 { // High stress = plate boundary

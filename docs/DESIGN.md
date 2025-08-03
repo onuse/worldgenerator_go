@@ -42,7 +42,7 @@ type VoxelMaterial struct {
     Density     float32      // kg/m³
     Temperature float32      // Kelvin
     Pressure    float32      // Pascals
-    VelR, VelTheta, VelPhi float32  // Velocity components
+    VelR, VelNorth, VelEast float32  // Velocity components
     Age         float32      // Material age
     Stress      float32      // Mechanical stress
     Composition float32      // 0=felsic, 1=mafic

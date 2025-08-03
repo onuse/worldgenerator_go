@@ -10,8 +10,8 @@ type GPUVoxelMaterial struct {
 	Density     float32
 	Temperature float32
 	Pressure    float32
-	VelTheta    float32
-	VelPhi      float32
+	VelNorth    float32
+	VelEast     float32
 	VelR        float32
 	Age         float32
 	PlateID     int32    // Which plate this voxel belongs to
@@ -26,8 +26,8 @@ func ConvertToGPUVoxel(v *core.VoxelMaterial) GPUVoxelMaterial {
 		Density:     v.Density,
 		Temperature: v.Temperature,
 		Pressure:    v.Pressure,
-		VelTheta:    v.VelTheta,
-		VelPhi:      v.VelPhi,
+		VelNorth:    v.VelNorth,
+		VelEast:     v.VelEast,
 		VelR:        v.VelR,
 		Age:         v.Age,
 	}

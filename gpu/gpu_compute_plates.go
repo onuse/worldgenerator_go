@@ -20,8 +20,8 @@ layout(std430, binding = 0) buffer VoxelData {
     float density;
     float temperature;
     float pressure;
-    float velTheta;
-    float velPhi;
+    float VelNorth;
+    float VelEast;
     float velR;
     float age;
     float viscosity;
@@ -172,7 +172,7 @@ vec3 calculateMantleCoupling(int voxelIdx, int plateID) {
         // Weight by proximity
         float weight = 1.0 / float(depthOffset);
         
-        mantleVel += vec3(voxels[mantleIdx].velPhi, voxels[mantleIdx].velTheta, voxels[mantleIdx].velR) * weight;
+        mantleVel += vec3(voxels[mantleIdx].VelEast, voxels[mantleIdx].VelNorth, voxels[mantleIdx].velR) * weight;
         totalWeight += weight;
     }
     
@@ -235,7 +235,7 @@ void main() {
             totalMass += voxelMass;
             
             // Velocity contribution
-            plateVelocity += vec3(voxels[idx].velPhi, voxels[idx].velTheta, voxels[idx].velR) * voxelMass;
+            plateVelocity += vec3(voxels[idx].VelEast, voxels[idx].VelNorth, voxels[idx].velR) * voxelMass;
             
             // Boundary forces
             if (voxels[idx].isBoundary > 0) {
@@ -257,7 +257,7 @@ void main() {
             
             // Basal drag from mantle coupling
             vec3 mantleVel = calculateMantleCoupling(idx, int(plateID));
-            vec3 relativeVel = vec3(voxels[idx].velPhi, voxels[idx].velTheta, 0.0) - mantleVel;
+            vec3 relativeVel = vec3(voxels[idx].VelEast, voxels[idx].VelNorth, 0.0) - mantleVel;
             totalBasalDrag -= relativeVel * MANTLE_VISCOSITY * 0.001; // Simplified drag
         }
     }
@@ -307,8 +307,8 @@ layout(std430, binding = 0) buffer VoxelData {
     float density;
     float temperature;
     float pressure;
-    float velTheta;
-    float velPhi;
+    float VelNorth;
+    float VelEast;
     float velR;
     float age;
     float viscosity;
@@ -479,8 +479,8 @@ void main() {
         if (neighborPlate == myPlate || neighborPlate < 0) continue;
         
         // Different plates - this is a boundary
-        vec3 myVel = vec3(voxels[idx].velPhi, voxels[idx].velTheta, voxels[idx].velR);
-        vec3 neighborVel = vec3(voxels[neighbors[i]].velPhi, voxels[neighbors[i]].velTheta, voxels[neighbors[i]].velR);
+        vec3 myVel = vec3(voxels[idx].VelEast, voxels[idx].VelNorth, voxels[idx].velR);
+        vec3 neighborVel = vec3(voxels[neighbors[i]].VelEast, voxels[neighbors[i]].VelNorth, voxels[neighbors[i]].velR);
         
         // Normal direction (simplified - should be proper spherical)
         vec3 normal = normalize(vec3(float(i < 2 ? 1 : 0), float(i >= 2 ? 1 : 0), 0));
@@ -553,8 +553,8 @@ layout(std430, binding = 0) buffer VoxelData {
     float density;
     float temperature;
     float pressure;
-    float velTheta;
-    float velPhi;
+    float VelNorth;
+    float VelEast;
     float velR;
     float age;
     float viscosity;
@@ -627,8 +627,8 @@ void main() {
     
     // Update velocities (blend with existing for smooth transition)
     float blendFactor = 0.1; // How quickly to adopt plate motion
-    voxels[idx].velTheta = mix(voxels[idx].velTheta, dot(plateVel, theta_hat), blendFactor);
-    voxels[idx].velPhi = mix(voxels[idx].velPhi, dot(plateVel, phi_hat), blendFactor);
+    voxels[idx].VelNorth = mix(voxels[idx].VelNorth, dot(plateVel, theta_hat), blendFactor);
+    voxels[idx].VelEast = mix(voxels[idx].VelEast, dot(plateVel, phi_hat), blendFactor);
     // velR is controlled by thermal/convection processes, not plate motion
     
     // Update age

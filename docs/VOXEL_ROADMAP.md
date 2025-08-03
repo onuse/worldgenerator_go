@@ -10,7 +10,11 @@ Native voxel-based planet simulator with GPU-accelerated physics and direct volu
 - ✅ Surface and volume rendering implemented
 - ✅ GPU compute shaders for physics (OpenGL 4.3)
 - ✅ Zero-copy GPU buffer sharing (persistent mapped buffers)
-- 🚧 Implementing enhanced grid with proper plate tectonics
+- ✅ Enhanced grid system with sub-cell positioning
+- ✅ Realistic water flow physics and conservation
+- ✅ Plate identification and visualization
+- ✅ Multiple render modes (material, temp, velocity, stress, elevation)
+- 🚧 Implementing proper rigid-body plate tectonics
 
 ## Architecture Decision
 After extensive prototyping, we've chosen a **hybrid architecture**:
@@ -21,17 +25,18 @@ After extensive prototyping, we've chosen a **hybrid architecture**:
 
 ## Development Phases
 
-### Phase 1: Enhanced Grid System 🚧 IMMEDIATE PRIORITY
+### Phase 1: Enhanced Grid System ✅ COMPLETED
 
-#### 1.1 Sub-cell Movement System
-- [ ] Add sub-position tracking to VoxelMaterial struct
-- [ ] Implement smooth movement accumulation
-- [ ] Handle cell boundary transitions without snapping
-- [ ] Maintain material continuity during transitions
-- [ ] Test with existing plate tectonics system
+#### 1.1 Sub-cell Movement System ✅
+- [x] Add sub-position tracking to VoxelMaterial struct
+- [x] Implement smooth movement accumulation
+- [x] Handle cell boundary transitions without snapping
+- [x] Maintain material continuity during transitions
+- [x] Test with existing plate tectonics system
 
-#### 1.2 Vertical Layer Transitions
-- [ ] Implement shell-to-shell movement for subduction/rising
+#### 1.2 Vertical Layer Transitions ✅
+- [x] Implement shell-to-shell movement for subduction/rising
+- [x] Add altitude/elevation tracking and visualization
 - [ ] Add vertical velocity component to plate motion
 - [ ] Handle material transformations during vertical movement
   - [ ] Continental crust → Magma (when subducting deep)
@@ -48,9 +53,10 @@ After extensive prototyping, we've chosen a **hybrid architecture**:
 - [ ] Implement interpolation between physics frames
 - [ ] Add configurable time scales for each system
 
-### Phase 2: Plate Boundary Detection & Classification
+### Phase 2: Plate Boundary Detection & Classification 🚧 CURRENT FOCUS
 
 #### 2.1 Boundary Detection System
+- [ ] Implement rigid-body plate motion (plates move as units)
 - [ ] Implement efficient neighbor checking for plate IDs
 - [ ] Calculate relative velocities between plates
 - [ ] Classify boundary types:
@@ -128,7 +134,20 @@ After extensive prototyping, we've chosen a **hybrid architecture**:
 - [ ] Ice cap growth/retreat
 - [ ] Weathering effects on rock
 
-### Phase 5: Performance & Optimization
+### Phase 5: Rendering & Visualization ✅ MOSTLY COMPLETE
+
+#### 5.1 Voxel Data Visualization
+- [x] Material type rendering with bright colors
+- [x] Temperature visualization (blue to red gradient)
+- [x] Velocity field visualization
+- [x] Stress visualization based on velocity
+- [x] Plate ID visualization with unique colors
+- [x] Sub-position visualization
+- [x] Elevation/topography with Earth-like colors
+- [ ] Age visualization (not yet implemented)
+- [ ] Fix overlay rendering for stats
+
+### Phase 6: Performance & Optimization
 
 #### 5.1 LOD System
 - [ ] Distance-based detail reduction
@@ -148,7 +167,7 @@ After extensive prototyping, we've chosen a **hybrid architecture**:
 - [ ] Compress inactive regions
 - [ ] Smart caching strategies
 
-### Phase 6: User Interface & Visualization
+### Phase 7: User Interface & Advanced Features
 
 #### 6.1 Visualization Modes
 - [ ] Enhanced material view with textures
@@ -209,9 +228,22 @@ After extensive prototyping, we've chosen a **hybrid architecture**:
 - **Maintainability**: Clear separation of concerns
 - **Flexibility**: Can adjust virtual/grid ratio as needed
 
-## Next Immediate Steps
-1. Create enhanced grid voxel structure with sub-positions
-2. Implement smooth movement accumulation
-3. Add vertical shell transitions
-4. Test with existing plate system
-5. Profile performance improvements
+## Next Immediate Steps (Phase 2 - Plate Tectonics)
+1. **Implement rigid-body plate motion** - Plates should move as coherent units
+2. **Add plate motion forces** - Ridge push, slab pull, basal drag
+3. **Detect plate boundaries** - Find where different PlateIDs meet
+4. **Classify boundary types** - Divergent, convergent, transform
+5. **Implement boundary behaviors**:
+   - Seafloor spreading at divergent boundaries
+   - Proper subduction at convergent boundaries
+   - Strike-slip motion at transform boundaries
+
+## Recently Completed
+- ✅ Sub-cell positioning eliminates grid snapping
+- ✅ Material continuity during plate movement
+- ✅ Water flow physics with conservation
+- ✅ Plate visualization with actual plate IDs passed to GPU
+- ✅ Stress and velocity visualizations
+- ✅ Elevation tracking and topographic rendering
+- ✅ Fixed continent blinking by separating plate movement and water processes
+- ✅ Two-pass physics system: continent movement pass, then water pass

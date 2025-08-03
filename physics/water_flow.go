@@ -23,7 +23,7 @@ func NewWaterFlow(planet *core.VoxelPlanet) *WaterFlow {
 		gravity:       9.81,
 		viscosity:     0.001,     // Water viscosity at 20°C
 		minFlowVolume: 0.01,      // 1% minimum to flow
-		maxFlowRate:   0.25,      // Max 25% of water flows per timestep
+		maxFlowRate:   0.1,       // Max 10% of water flows per timestep (reduced for stability)
 	}
 }
 
@@ -71,6 +71,14 @@ func (wf *WaterFlow) calculateFlows(shell *core.SphericalShell, dt float32) []fl
 			neighbors := wf.getNeighbors(shell, latIdx, lonIdx)
 			
 			for _, n := range neighbors {
+				// Validate indices before access
+				if n.lat < 0 || n.lat >= len(shell.Voxels) {
+					continue
+				}
+				if n.lon < 0 || n.lon >= len(shell.Voxels[n.lat]) {
+					continue
+				}
+				
 				neighborVoxel := &shell.Voxels[n.lat][n.lon]
 				
 				// Calculate height difference (including water surface)
@@ -235,24 +243,35 @@ func (wf *WaterFlow) applyFlows(shell *core.SphericalShell, flows []flowData) {
 
 // updateMaterialTypes changes voxel materials based on water presence
 func (wf *WaterFlow) updateMaterialTypes(shell *core.SphericalShell) {
+	// DISABLED: Material type changes based on water volume cause blinking
+	// Water flow should only move water around, not change land to water
+	// This prevents the oscillation between water and land states
+	return
+	
+	// Original code kept for reference:
+	/*
 	for latIdx := range shell.Voxels {
 		for lonIdx := range shell.Voxels[latIdx] {
 			voxel := &shell.Voxels[latIdx][lonIdx]
 			
-			// Update material type based on water volume
+			// Update material type based on water volume with hysteresis
+			// This prevents oscillation between water and land states
 			switch voxel.Type {
 			case core.MatWater:
-				// If water drained away, expose sediment
-				if voxel.WaterVolume < 0.1 {
+				// Only convert to sediment if water is completely drained
+				if voxel.WaterVolume < 0.01 {
 					voxel.Type = core.MatSediment
+					voxel.WaterVolume = 0.0
 				}
 				
 			case core.MatGranite, core.MatBasalt, core.MatSediment:
-				// If land is flooded, it becomes water
-				if voxel.WaterVolume > 0.5 {
+				// Only convert to water if completely flooded
+				// Much higher threshold to prevent oscillation
+				if voxel.WaterVolume > 0.95 {
 					voxel.Type = core.MatWater
 				}
 			}
 		}
 	}
+	*/
 }

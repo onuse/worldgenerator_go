@@ -2,6 +2,7 @@ package shaders
 
 import (
 	"fmt"
+
 	"github.com/go-gl/gl/v4.3-core/gl"
 )
 
@@ -126,6 +127,26 @@ int findShell(float r) {
     return -1;
 }
 
+// Get plate ID at a 3D position
+float getPlateID(vec3 pos) {
+    float r = length(pos);
+    int shell = findShell(r);
+    if (shell < 0) return 0.0;
+    
+    // Convert to spherical coordinates
+    // Camera uses Y as up, so Y is our vertical axis
+    vec3 normalized = normalize(pos);
+    float lat = asin(clamp(normalized.y, -1.0, 1.0));
+    float lon = atan(normalized.z, normalized.x);
+    
+    // Convert to texture coordinates
+    float u = (lon + 3.14159265) / (2.0 * 3.14159265);
+    float v = (lat + 1.57079633) / 3.14159265;
+    
+    vec3 texCoord = vec3(u, v, float(shell));
+    return texture(temperatureTexture, texCoord).b; // PlateID is in blue channel
+}
+
 // Sample voxel data at a 3D position with smoothing
 vec4 sampleVoxelData(vec3 pos) {
     float r = length(pos);
@@ -135,9 +156,10 @@ vec4 sampleVoxelData(vec3 pos) {
     if (shell < 0) return vec4(0.0);
     
     // Convert to spherical coordinates
+    // Camera uses Y as up, so Y is our vertical axis
     vec3 normalized = normalize(pos);
-    float lat = asin(clamp(normalized.z, -1.0, 1.0)); // -PI/2 to PI/2
-    float lon = atan(normalized.y, normalized.x); // -PI to PI
+    float lat = asin(clamp(normalized.y, -1.0, 1.0)); // -PI/2 to PI/2
+    float lon = atan(normalized.z, normalized.x); // -PI to PI
     
     // Convert to texture coordinates matching the texture generation
     float u = (lon + 3.14159265) / (2.0 * 3.14159265); // 0 to 1
@@ -152,10 +174,10 @@ vec4 sampleVoxelData(vec3 pos) {
     }
     
     float matType = texture(materialTexture, texCoord).r; // Use nearest filtering for materials
-    vec2 tempElev = texture(temperatureTexture, texCoord).rg; // Temperature and elevation
+    vec3 tempElevPlate = texture(temperatureTexture, texCoord).rgb; // Temperature, elevation, plateID
     vec2 vel = texture(velocityTexture, texCoord).rg;
     
-    return vec4(matType, tempElev.g, vel.x, vel.y); // Return elevation in .y component
+    return vec4(matType, tempElevPlate.g, vel.x, vel.y); // Return elevation in .y component
 }
 
 // Ray-sphere intersection
@@ -208,8 +230,8 @@ vec4 rayMarchVolume(vec3 ro, vec3 rd) {
             
             // Calculate texture coordinates for this position
             vec3 normalized = normalize(samplePos);
-            float lat = asin(clamp(normalized.z, -1.0, 1.0));
-            float lon = atan(normalized.y, normalized.x);
+            float lat = asin(clamp(normalized.y, -1.0, 1.0));
+            float lon = atan(normalized.z, normalized.x);
             float u = (lon + 3.14159265) / (2.0 * 3.14159265);
             float v = (lat + 1.57079633) / 3.14159265;
             
@@ -267,18 +289,19 @@ vec4 rayMarchVolume(vec3 ro, vec3 rd) {
             } else if (renderMode == 1) { // Temperature
                 // Need to fetch temperature from texture directly
                 int shell = findShell(length(samplePos));
-                vec2 tempElev = texture(temperatureTexture, vec3(u, v, float(shell))).rg;
-                float temp = tempElev.r; // Temperature is in R channel
+                vec3 tempElevPlate = texture(temperatureTexture, vec3(u, v, float(shell))).rgb;
+                float temp = tempElevPlate.r; // Temperature is in R channel
                 float normalizedTemp = clamp((temp - 273.0) / 3000.0, 0.0, 1.0);
                 color = mix(vec3(0.0, 0.0, 1.0), vec3(1.0, 0.0, 0.0), normalizedTemp);
             } else if (renderMode == 2) { // Velocity
                 float vel = length(voxelData.zw) * 1e9;
                 color = mix(vec3(0.0, 0.0, 0.5), vec3(1.0, 1.0, 0.0), clamp(vel / 5.0, 0.0, 1.0));
             } else if (renderMode == 4) { // Plate visualization
-                // Use position-based pseudo-plates for now
-                if (matType == 2 || matType == 3) {
-                    float pseudoPlate = float(int(lon * 10.0) + int(lat * 10.0) * 17) * 137.5;
-                    float hue = mod(pseudoPlate, 360.0) / 360.0;
+                // Use actual plate ID from texture
+                float plateID = getPlateID(samplePos);
+                if (plateID > 0.0 && (matType == 2 || matType == 3)) {
+                    // Generate color from plate ID
+                    float hue = mod(plateID * 137.5, 360.0) / 360.0;
                     // HSV to RGB conversion
                     vec3 c = vec3(hue, 0.7, 0.8);
                     vec4 K = vec4(1.0, 2.0 / 3.0, 1.0 / 3.0, 3.0);
@@ -347,8 +370,8 @@ vec4 rayMarchVolume(vec3 ro, vec3 rd) {
         // For sub-position visualization, we need to sample the full velocity texture
         float shellIndex = float(findShell(length(pos)));
         vec3 normalized = normalize(pos);
-        float lat = asin(clamp(normalized.z, -1.0, 1.0));
-        float lon = atan(normalized.y, normalized.x);
+        float lat = asin(clamp(normalized.y, -1.0, 1.0));
+        float lon = atan(normalized.z, normalized.x);
         float u = (lon + 3.14159265) / (2.0 * 3.14159265);
         float v = (lat + 1.57079633) / 3.14159265;
         
@@ -368,11 +391,10 @@ vec4 rayMarchVolume(vec3 ro, vec3 rd) {
             float vel = length(voxelData.zw) * 1e9; // Convert to cm/year
             color = mix(vec3(0.0, 0.0, 0.5), vec3(1.0, 1.0, 0.0), clamp(vel / 10.0, 0.0, 1.0));
             props.opacity = 0.1;
-        } else if (renderMode == 4) { // Plates - use material type as a proxy for now
-            // Without plate data in textures, show different colors for rock types
-            if (matType == 2 || matType == 3) { // Basalt or Granite
-                float pseudoPlate = float(matType + int(pos.x * 10.0) + int(pos.z * 10.0)) * 137.5;
-                float hue = mod(pseudoPlate, 360.0) / 360.0;
+        } else if (renderMode == 4) { // Plates - use actual plate data
+            float plateID = getPlateID(pos);
+            if (plateID > 0.0 && (matType == 2 || matType == 3)) { // Only for crustal material
+                float hue = mod(plateID * 137.5, 360.0) / 360.0;
                 vec3 hsv = vec3(hue, 0.7, 0.8);
                 vec4 K = vec4(1.0, 2.0 / 3.0, 1.0 / 3.0, 3.0);
                 vec3 p = abs(fract(hsv.xxx + K.xyz) * 6.0 - K.www);
@@ -380,7 +402,7 @@ vec4 rayMarchVolume(vec3 ro, vec3 rd) {
             }
         } else if (renderMode == 5) { // Stress visualization
             // Show velocity magnitudes as stress indicators
-            // voxelData.z = VelTheta, voxelData.w = VelPhi
+            // voxelData.z = VelNorth, voxelData.w = VelEast
             float vel = length(voxelData.zw) * 1e9; // Convert to cm/year
             
             // DEBUG: Show any non-zero velocity as bright color
@@ -574,20 +596,20 @@ func CompileVoxelRayMarchShaders() (uint32, error) {
 		return 0, err
 	}
 	defer gl.DeleteShader(vertShader)
-	
+
 	// Compile fragment shader
 	fragShader, err := compileShader(voxelRayMarchFragmentShaderV2, gl.FRAGMENT_SHADER)
 	if err != nil {
 		return 0, err
 	}
 	defer gl.DeleteShader(fragShader)
-	
+
 	// Link program
 	program := gl.CreateProgram()
 	gl.AttachShader(program, vertShader)
 	gl.AttachShader(program, fragShader)
 	gl.LinkProgram(program)
-	
+
 	var status int32
 	gl.GetProgramiv(program, gl.LINK_STATUS, &status)
 	if status == gl.FALSE {
@@ -597,8 +619,8 @@ func CompileVoxelRayMarchShaders() (uint32, error) {
 		gl.GetProgramInfoLog(program, logLength, nil, &log[0])
 		return 0, fmt.Errorf("program link error: %s", log)
 	}
-	
+
 	fmt.Println("✅ Volume ray marching shaders compiled successfully")
-	
+
 	return program, nil
 }

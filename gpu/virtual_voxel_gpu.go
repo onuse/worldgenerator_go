@@ -3,17 +3,17 @@ package gpu
 import (
 	"fmt"
 	"worldgenerator/core"
-	
+
 	"github.com/go-gl/gl/v4.3-core/gl"
 )
 
 // VirtualVoxelGPU handles GPU-accelerated virtual voxel physics
 type VirtualVoxelGPU struct {
 	// Shader programs
-	physicsProgram  uint32
-	mappingProgram  uint32
-	clearProgram    uint32
-	
+	physicsProgram uint32
+	mappingProgram uint32
+	clearProgram   uint32
+
 	// SSBOs
 	voxelBuffer    uint32
 	bondBuffer     uint32
@@ -21,13 +21,13 @@ type VirtualVoxelGPU struct {
 	gridBuffer     uint32
 	weightBuffer   uint32
 	lonCountBuffer uint32
-	
+
 	// Data sizes
-	numVoxels     int
-	numBonds      int
-	numPlates     int
-	gridSize      int
-	
+	numVoxels int
+	numBonds  int
+	numPlates int
+	gridSize  int
+
 	// References
 	planet *core.VoxelPlanet
 	system *core.VirtualVoxelSystem
@@ -35,16 +35,16 @@ type VirtualVoxelGPU struct {
 
 // GPUVirtualVoxel matches shader structure (64 bytes)
 type GPUVirtualVoxel struct {
-	Position     [3]float32 // r, theta, phi
-	Mass         float32
-	Velocity     [3]float32
-	Temperature  float32
-	Force        [3]float32
-	PlateID      int32
-	Material     int32
-	BondOffset   int32
-	BondCount    int32
-	Padding      float32
+	Position    [3]float32 // r, theta, phi
+	Mass        float32
+	Velocity    [3]float32
+	Temperature float32
+	Force       [3]float32
+	PlateID     int32
+	Material    int32
+	BondOffset  int32
+	BondCount   int32
+	Padding     float32
 }
 
 // GPUVoxelBond matches shader structure (16 bytes)
@@ -70,22 +70,22 @@ func NewVirtualVoxelGPU(planet *core.VoxelPlanet, system *core.VirtualVoxelSyste
 		numBonds:  len(system.Bonds),
 		numPlates: 20, // Max plates
 	}
-	
+
 	// Compile shaders
 	if err := vvg.compileShaders(); err != nil {
 		return nil, fmt.Errorf("failed to compile shaders: %v", err)
 	}
-	
+
 	// Create buffers
 	if err := vvg.createBuffers(); err != nil {
 		return nil, fmt.Errorf("failed to create buffers: %v", err)
 	}
-	
+
 	// Upload initial data
 	if err := vvg.uploadData(); err != nil {
 		return nil, fmt.Errorf("failed to upload data: %v", err)
 	}
-	
+
 	return vvg, nil
 }
 
@@ -98,7 +98,7 @@ func (vvg *VirtualVoxelGPU) compileShaders() error {
 	gl.ShaderSource(physicsShader, 1, csources, nil)
 	free()
 	gl.CompileShader(physicsShader)
-	
+
 	// Check compilation
 	var status int32
 	gl.GetShaderiv(physicsShader, gl.COMPILE_STATUS, &status)
@@ -109,13 +109,13 @@ func (vvg *VirtualVoxelGPU) compileShaders() error {
 		gl.GetShaderInfoLog(physicsShader, logLength, nil, &log[0])
 		return fmt.Errorf("physics shader compilation failed: %s", log)
 	}
-	
+
 	// Create physics program
 	vvg.physicsProgram = gl.CreateProgram()
 	gl.AttachShader(vvg.physicsProgram, physicsShader)
 	gl.LinkProgram(vvg.physicsProgram)
 	gl.DeleteShader(physicsShader)
-	
+
 	// Load mapping shader
 	mappingSource := virtualVoxelMappingShader
 	mappingShader := gl.CreateShader(gl.COMPUTE_SHADER)
@@ -123,7 +123,7 @@ func (vvg *VirtualVoxelGPU) compileShaders() error {
 	gl.ShaderSource(mappingShader, 1, csources2, nil)
 	free2()
 	gl.CompileShader(mappingShader)
-	
+
 	// Check compilation
 	gl.GetShaderiv(mappingShader, gl.COMPILE_STATUS, &status)
 	if status == gl.FALSE {
@@ -133,13 +133,13 @@ func (vvg *VirtualVoxelGPU) compileShaders() error {
 		gl.GetShaderInfoLog(mappingShader, logLength, nil, &log[0])
 		return fmt.Errorf("mapping shader compilation failed: %s", log)
 	}
-	
+
 	// Create mapping program
 	vvg.mappingProgram = gl.CreateProgram()
 	gl.AttachShader(vvg.mappingProgram, mappingShader)
 	gl.LinkProgram(vvg.mappingProgram)
 	gl.DeleteShader(mappingShader)
-	
+
 	return nil
 }
 
@@ -149,33 +149,33 @@ func (vvg *VirtualVoxelGPU) createBuffers() error {
 	gl.GenBuffers(1, &vvg.voxelBuffer)
 	gl.BindBuffer(gl.SHADER_STORAGE_BUFFER, vvg.voxelBuffer)
 	gl.BufferData(gl.SHADER_STORAGE_BUFFER, vvg.numVoxels*64, nil, gl.DYNAMIC_DRAW)
-	
+
 	// Bond buffer
 	gl.GenBuffers(1, &vvg.bondBuffer)
 	gl.BindBuffer(gl.SHADER_STORAGE_BUFFER, vvg.bondBuffer)
 	gl.BufferData(gl.SHADER_STORAGE_BUFFER, vvg.numBonds*16, nil, gl.STATIC_DRAW)
-	
+
 	// Plate motion buffer
 	gl.GenBuffers(1, &vvg.plateBuffer)
 	gl.BindBuffer(gl.SHADER_STORAGE_BUFFER, vvg.plateBuffer)
 	gl.BufferData(gl.SHADER_STORAGE_BUFFER, vvg.numPlates*16, nil, gl.DYNAMIC_DRAW)
-	
+
 	// Grid buffer (for surface shell)
 	surfaceShell := vvg.planet.Shells[len(vvg.planet.Shells)-2]
 	vvg.gridSize = 0
 	for _, count := range surfaceShell.LonCounts {
 		vvg.gridSize += count
 	}
-	
+
 	gl.GenBuffers(1, &vvg.gridBuffer)
 	gl.BindBuffer(gl.SHADER_STORAGE_BUFFER, vvg.gridBuffer)
 	gl.BufferData(gl.SHADER_STORAGE_BUFFER, vvg.gridSize*64, nil, gl.DYNAMIC_DRAW)
-	
+
 	// Weight buffer for accumulation
 	gl.GenBuffers(1, &vvg.weightBuffer)
 	gl.BindBuffer(gl.SHADER_STORAGE_BUFFER, vvg.weightBuffer)
 	gl.BufferData(gl.SHADER_STORAGE_BUFFER, vvg.gridSize*4, nil, gl.DYNAMIC_DRAW)
-	
+
 	// Longitude count buffer
 	gl.GenBuffers(1, &vvg.lonCountBuffer)
 	gl.BindBuffer(gl.SHADER_STORAGE_BUFFER, vvg.lonCountBuffer)
@@ -184,9 +184,9 @@ func (vvg *VirtualVoxelGPU) createBuffers() error {
 		lonCounts[i] = int32(count)
 	}
 	gl.BufferData(gl.SHADER_STORAGE_BUFFER, len(lonCounts)*4, gl.Ptr(lonCounts), gl.STATIC_DRAW)
-	
+
 	gl.BindBuffer(gl.SHADER_STORAGE_BUFFER, 0)
-	
+
 	return nil
 }
 
@@ -207,11 +207,11 @@ func (vvg *VirtualVoxelGPU) uploadData() error {
 			BondCount:   vv.BondCount,
 		}
 	}
-	
+
 	// Upload voxels
 	gl.BindBuffer(gl.SHADER_STORAGE_BUFFER, vvg.voxelBuffer)
 	gl.BufferSubData(gl.SHADER_STORAGE_BUFFER, 0, len(gpuVoxels)*64, gl.Ptr(gpuVoxels))
-	
+
 	// Convert bonds to GPU format
 	gpuBonds := make([]GPUVoxelBond, vvg.numBonds)
 	for i, bond := range vvg.system.Bonds {
@@ -222,36 +222,36 @@ func (vvg *VirtualVoxelGPU) uploadData() error {
 			Strength:   bond.Strength,
 		}
 	}
-	
+
 	// Upload bonds
 	gl.BindBuffer(gl.SHADER_STORAGE_BUFFER, vvg.bondBuffer)
 	gl.BufferSubData(gl.SHADER_STORAGE_BUFFER, 0, len(gpuBonds)*16, gl.Ptr(gpuBonds))
-	
+
 	gl.BindBuffer(gl.SHADER_STORAGE_BUFFER, 0)
-	
+
 	return nil
 }
 
 // UpdatePhysics runs the physics compute shader
 func (vvg *VirtualVoxelGPU) UpdatePhysics(dt float32) {
 	//fmt.Printf("GPU Physics Update: dt=%.6f\n", dt)
-	
+
 	gl.UseProgram(vvg.physicsProgram)
-	
+
 	// Set uniforms
 	gl.Uniform1f(gl.GetUniformLocation(vvg.physicsProgram, gl.Str("deltaTime\x00")), dt)
 	gl.Uniform1f(gl.GetUniformLocation(vvg.physicsProgram, gl.Str("planetRadius\x00")), float32(vvg.planet.Radius))
 	gl.Uniform1i(gl.GetUniformLocation(vvg.physicsProgram, gl.Str("numVoxels\x00")), int32(vvg.numVoxels))
-	
+
 	// Bind buffers
 	gl.BindBufferBase(gl.SHADER_STORAGE_BUFFER, 0, vvg.voxelBuffer)
 	gl.BindBufferBase(gl.SHADER_STORAGE_BUFFER, 1, vvg.bondBuffer)
 	gl.BindBufferBase(gl.SHADER_STORAGE_BUFFER, 2, vvg.plateBuffer)
-	
+
 	// Dispatch compute
 	workGroups := (vvg.numVoxels + 255) / 256
 	gl.DispatchCompute(uint32(workGroups), 1, 1)
-	
+
 	// Memory barrier
 	gl.MemoryBarrier(gl.SHADER_STORAGE_BARRIER_BIT)
 }
@@ -260,34 +260,34 @@ func (vvg *VirtualVoxelGPU) UpdatePhysics(dt float32) {
 func (vvg *VirtualVoxelGPU) MapToGrid() {
 	// First, clear the grid and weights
 	vvg.clearGrid()
-	
+
 	// Then map virtual voxels to grid
 	gl.UseProgram(vvg.mappingProgram)
-	
+
 	// Surface shell parameters
 	surfaceShell := len(vvg.planet.Shells) - 2
 	shell := &vvg.planet.Shells[surfaceShell]
-	
+
 	// Set uniforms
 	gl.Uniform1i(gl.GetUniformLocation(vvg.mappingProgram, gl.Str("shellIndex\x00")), int32(surfaceShell))
 	gl.Uniform1i(gl.GetUniformLocation(vvg.mappingProgram, gl.Str("latBands\x00")), int32(shell.LatBands))
 	gl.Uniform1i(gl.GetUniformLocation(vvg.mappingProgram, gl.Str("numVirtualVoxels\x00")), int32(vvg.numVoxels))
 	gl.Uniform1f(gl.GetUniformLocation(vvg.mappingProgram, gl.Str("innerRadius\x00")), float32(shell.InnerRadius))
 	gl.Uniform1f(gl.GetUniformLocation(vvg.mappingProgram, gl.Str("outerRadius\x00")), float32(shell.OuterRadius))
-	
+
 	// Bind buffers
 	gl.BindBufferBase(gl.SHADER_STORAGE_BUFFER, 0, vvg.voxelBuffer)
 	gl.BindBufferBase(gl.SHADER_STORAGE_BUFFER, 1, vvg.gridBuffer)
 	gl.BindBufferBase(gl.SHADER_STORAGE_BUFFER, 2, vvg.weightBuffer)
 	gl.BindBufferBase(gl.SHADER_STORAGE_BUFFER, 3, vvg.lonCountBuffer)
-	
+
 	// Dispatch compute - one thread per virtual voxel
 	workGroups := (vvg.numVoxels + 255) / 256
 	gl.DispatchCompute(uint32(workGroups), 1, 1)
-	
+
 	// Memory barrier
 	gl.MemoryBarrier(gl.SHADER_STORAGE_BARRIER_BIT)
-	
+
 	// Read back grid data to CPU voxels
 	vvg.readBackGridGPU()
 }
@@ -299,7 +299,7 @@ func (vvg *VirtualVoxelGPU) clearGrid() {
 	clearData := make([]byte, vvg.gridSize*64)
 	gl.BindBuffer(gl.SHADER_STORAGE_BUFFER, vvg.gridBuffer)
 	gl.BufferSubData(gl.SHADER_STORAGE_BUFFER, 0, len(clearData), gl.Ptr(clearData))
-	
+
 	clearWeights := make([]float32, vvg.gridSize)
 	gl.BindBuffer(gl.SHADER_STORAGE_BUFFER, vvg.weightBuffer)
 	gl.BufferSubData(gl.SHADER_STORAGE_BUFFER, 0, len(clearWeights)*4, gl.Ptr(clearWeights))
@@ -318,19 +318,19 @@ func (vvg *VirtualVoxelGPU) readBackGridGPU() {
 	if surfaceShell < 0 {
 		return
 	}
-	
+
 	shell := &vvg.planet.Shells[surfaceShell]
-	
+
 	// Read grid data from GPU
 	gridData := make([]GPUGridVoxel, vvg.gridSize)
 	gl.BindBuffer(gl.SHADER_STORAGE_BUFFER, vvg.gridBuffer)
 	gl.GetBufferSubData(gl.SHADER_STORAGE_BUFFER, 0, vvg.gridSize*64, gl.Ptr(gridData))
-	
+
 	// Read weights
 	weights := make([]float32, vvg.gridSize)
 	gl.BindBuffer(gl.SHADER_STORAGE_BUFFER, vvg.weightBuffer)
 	gl.GetBufferSubData(gl.SHADER_STORAGE_BUFFER, 0, vvg.gridSize*4, gl.Ptr(weights))
-	
+
 	// Update CPU voxels
 	gridIdx := 0
 	for latIdx := range shell.Voxels {
@@ -338,11 +338,11 @@ func (vvg *VirtualVoxelGPU) readBackGridGPU() {
 			if gridIdx >= vvg.gridSize {
 				return
 			}
-			
+
 			voxel := &shell.Voxels[latIdx][lonIdx]
 			grid := &gridData[gridIdx]
 			weight := weights[gridIdx]
-			
+
 			// Update voxel if it has weight from virtual voxels
 			if weight > 0.01 {
 				voxel.Type = core.MaterialType(grid.Material)
@@ -350,8 +350,8 @@ func (vvg *VirtualVoxelGPU) readBackGridGPU() {
 				voxel.Temperature = grid.Temperature
 				voxel.Pressure = grid.Pressure
 				voxel.VelR = grid.Velocity[0]
-				voxel.VelTheta = grid.Velocity[1]
-				voxel.VelPhi = grid.Velocity[2]
+				voxel.VelNorth = grid.Velocity[1]
+				voxel.VelEast = grid.Velocity[2]
 				voxel.Age = grid.Age
 				voxel.Stress = grid.Stress
 				voxel.Composition = grid.Composition
@@ -362,11 +362,11 @@ func (vvg *VirtualVoxelGPU) readBackGridGPU() {
 				voxel.Density = core.MaterialProperties[core.MatWater].DefaultDensity
 				voxel.PlateID = 0
 			}
-			
+
 			gridIdx++
 		}
 	}
-	
+
 	// Mark as dirty for rendering
 	vvg.planet.MeshDirty = true
 }
@@ -388,7 +388,7 @@ type GPUGridVoxel struct {
 func (vvg *VirtualVoxelGPU) SetPlateVelocities(velocities map[int32][3]float32) {
 	// Convert to GPU format
 	plateMoions := make([]GPUPlateMotion, vvg.numPlates)
-	
+
 	for plateID, vel := range velocities {
 		if plateID > 0 && int(plateID) <= vvg.numPlates {
 			plateMoions[plateID-1] = GPUPlateMotion{
@@ -396,7 +396,7 @@ func (vvg *VirtualVoxelGPU) SetPlateVelocities(velocities map[int32][3]float32) 
 			}
 		}
 	}
-	
+
 	// Upload to GPU
 	gl.BindBuffer(gl.SHADER_STORAGE_BUFFER, vvg.plateBuffer)
 	gl.BufferSubData(gl.SHADER_STORAGE_BUFFER, 0, len(plateMoions)*16, gl.Ptr(plateMoions))

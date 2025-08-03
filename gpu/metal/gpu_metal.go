@@ -1,3 +1,4 @@
+//go:build darwin
 // +build darwin
 
 package metal
@@ -25,7 +26,7 @@ typedef struct {
     float density;
     float temperature;
     float pressure;
-    float velR, velTheta, velPhi;
+    float velR, VelNorth, VelEast;
     float age;
     float stress;
     float composition;
@@ -49,35 +50,35 @@ int compileShaders(MetalContext* ctx, const char* source);
 void* createBuffer(MetalContext* ctx, size_t size, const void* data);
 void releaseBuffer(void* buffer);
 void* getBufferContents(void* buffer);
-int runTemperatureKernel(MetalContext* ctx, void* voxelBuffer, void* shellBuffer, 
+int runTemperatureKernel(MetalContext* ctx, void* voxelBuffer, void* shellBuffer,
                         int voxelCount, float dt, float thermalDiffusivity);
-int runConvectionKernel(MetalContext* ctx, void* voxelBuffer, void* shellBuffer, 
+int runConvectionKernel(MetalContext* ctx, void* voxelBuffer, void* shellBuffer,
                        int voxelCount, float dt);
-int runAdvectionKernel(MetalContext* ctx, void* voxelBuffer, void* newVoxelBuffer, 
+int runAdvectionKernel(MetalContext* ctx, void* voxelBuffer, void* newVoxelBuffer,
                       void* shellBuffer, int voxelCount, float dt);
 int computeNeighborIndices(MetalContext* ctx, void* neighborBuffer, void* shellBuffer, int voxelCount);
-int runTemperatureFastKernel(MetalContext* ctx, void* voxelBuffer, void* neighborBuffer, 
+int runTemperatureFastKernel(MetalContext* ctx, void* voxelBuffer, void* neighborBuffer,
                             int voxelCount, float dt, float thermalDiffusivity);
 */
 import "C"
 
 import (
-	"worldgenerator/core"
 	"fmt"
 	"unsafe"
+	"worldgenerator/core"
 )
 
 // MetalCompute handles GPU acceleration for voxel physics
 type MetalCompute struct {
-	ctx             *C.MetalContext
-	voxelBuffer     unsafe.Pointer // GPU buffer for all voxels
-	shellBuffer     unsafe.Pointer // GPU buffer for shell metadata
-	tempBuffer      unsafe.Pointer // Temporary buffer for advection
-	neighborBuffer  unsafe.Pointer // Precomputed neighbor indices
-	totalVoxels     int
-	shellCount      int
-	initialized     bool
-	neighborsReady  bool
+	ctx            *C.MetalContext
+	voxelBuffer    unsafe.Pointer // GPU buffer for all voxels
+	shellBuffer    unsafe.Pointer // GPU buffer for shell metadata
+	tempBuffer     unsafe.Pointer // Temporary buffer for advection
+	neighborBuffer unsafe.Pointer // Precomputed neighbor indices
+	totalVoxels    int
+	shellCount     int
+	initialized    bool
+	neighborsReady bool
 }
 
 // NewMetalCompute creates a new Metal compute context
@@ -98,7 +99,7 @@ func NewMetalCompute(planet *core.VoxelPlanet) (*MetalCompute, error) {
 		C.releaseMetalContext(ctx)
 		return nil, err
 	}
-	
+
 	// Initialize with planet data
 	if err := mc.InitializeForPlanet(planet); err != nil {
 		C.releaseMetalContext(ctx)
@@ -111,15 +112,15 @@ func NewMetalCompute(planet *core.VoxelPlanet) (*MetalCompute, error) {
 // compileShaders loads and compiles Metal shaders
 func (mc *MetalCompute) compileShaders() error {
 	shaderSource := metalShaderSource // Defined below
-	
+
 	cSource := C.CString(shaderSource)
 	defer C.free(unsafe.Pointer(cSource))
-	
+
 	result := C.compileShaders(mc.ctx, cSource)
 	if result != 0 {
 		return fmt.Errorf("failed to compile Metal shaders")
 	}
-	
+
 	return nil
 }
 
@@ -132,48 +133,48 @@ func (mc *MetalCompute) InitializeForPlanet(planet *core.VoxelPlanet) error {
 			totalVoxels += len(latVoxels)
 		}
 	}
-	
+
 	mc.totalVoxels = totalVoxels
 	mc.shellCount = len(planet.Shells)
-	
+
 	// Allocate GPU buffers
 	voxelSize := C.sizeof_GPUVoxel
 	shellSize := C.sizeof_GPUShell
-	
+
 	// Allocate voxel buffer
 	mc.voxelBuffer = C.createBuffer(mc.ctx, C.size_t(totalVoxels)*C.size_t(voxelSize), nil)
 	if mc.voxelBuffer == nil {
 		return fmt.Errorf("failed to allocate voxel buffer")
 	}
-	
+
 	// Allocate temporary buffer for advection
 	mc.tempBuffer = C.createBuffer(mc.ctx, C.size_t(totalVoxels)*C.size_t(voxelSize), nil)
 	if mc.tempBuffer == nil {
 		return fmt.Errorf("failed to allocate temp buffer")
 	}
-	
+
 	// Allocate shell metadata buffer
 	mc.shellBuffer = C.createBuffer(mc.ctx, C.size_t(mc.shellCount)*C.size_t(shellSize), nil)
 	if mc.shellBuffer == nil {
 		return fmt.Errorf("failed to allocate shell buffer")
 	}
-	
+
 	// Allocate neighbor indices buffer (6 neighbors per voxel)
 	mc.neighborBuffer = C.createBuffer(mc.ctx, C.size_t(totalVoxels*6)*C.size_t(4), nil) // 4 bytes per int
 	if mc.neighborBuffer == nil {
 		return fmt.Errorf("failed to allocate neighbor buffer")
 	}
-	
+
 	// Copy initial data to GPU
 	if err := mc.uploadPlanetData(planet); err != nil {
 		return err
 	}
-	
+
 	// Compute neighbor indices
 	if err := mc.computeNeighborIndices(); err != nil {
 		return err
 	}
-	
+
 	mc.initialized = true
 	return nil
 }
@@ -183,7 +184,7 @@ func (mc *MetalCompute) UpdateTemperature(dt float64) error {
 	if !mc.initialized {
 		return fmt.Errorf("Metal compute not initialized")
 	}
-	
+
 	// Use fast kernel if neighbors are precomputed
 	if mc.neighborsReady {
 		result := C.runTemperatureFastKernel(
@@ -194,7 +195,7 @@ func (mc *MetalCompute) UpdateTemperature(dt float64) error {
 			C.float(dt),
 			C.float(1e-6), // thermal diffusivity
 		)
-		
+
 		if result != 0 {
 			return fmt.Errorf("fast temperature kernel failed")
 		}
@@ -208,12 +209,12 @@ func (mc *MetalCompute) UpdateTemperature(dt float64) error {
 			C.float(dt),
 			C.float(1e-6), // thermal diffusivity
 		)
-		
+
 		if result != 0 {
 			return fmt.Errorf("temperature kernel failed")
 		}
 	}
-	
+
 	return nil
 }
 
@@ -222,7 +223,7 @@ func (mc *MetalCompute) UpdateConvection(dt float64) error {
 	if !mc.initialized {
 		return fmt.Errorf("Metal compute not initialized")
 	}
-	
+
 	// Run convection kernel
 	result := C.runConvectionKernel(
 		mc.ctx,
@@ -231,11 +232,11 @@ func (mc *MetalCompute) UpdateConvection(dt float64) error {
 		C.int(mc.totalVoxels),
 		C.float(dt),
 	)
-	
+
 	if result != 0 {
 		return fmt.Errorf("convection kernel failed")
 	}
-	
+
 	return nil
 }
 
@@ -274,8 +275,8 @@ struct Voxel {
     float temperature;
     float pressure;
     float velR;
-    float velTheta;
-    float velPhi;
+    float VelNorth;
+    float VelEast;
     float age;
     float stress;
     float composition;
@@ -435,13 +436,13 @@ kernel void updateConvection(
         voxel.velR = velocity * dt;
         
         // Add some lateral circulation
-        voxel.velTheta = velocity * 0.1 * sin(float(localIdx) * 0.1) * dt;
-        voxel.velPhi = velocity * 0.1 * cos(float(localIdx) * 0.15) * dt;
+        voxel.VelNorth = velocity * 0.1 * sin(float(localIdx) * 0.1) * dt;
+        voxel.VelEast = velocity * 0.1 * cos(float(localIdx) * 0.15) * dt;
     } else {
         // Decay velocities
         voxel.velR *= 0.95;
-        voxel.velTheta *= 0.95;
-        voxel.velPhi *= 0.95;
+        voxel.VelNorth *= 0.95;
+        voxel.VelEast *= 0.95;
     }
 }
 
@@ -527,7 +528,7 @@ kernel void advectMaterial(
         // Update velocity to reflect actual movement
         if (voxel.core.MaterialType > 2) {
             // Velocity in m/s (10 cm/year at equator)
-            newVoxel.velPhi = 3e-9 * speedFactor;
+            newVoxel.VelEast = 3e-9 * speedFactor;
         }
     }
     
@@ -679,7 +680,7 @@ func (mc *MetalCompute) uploadPlanetData(planet *core.VoxelPlanet) error {
 	// Get GPU buffer pointers
 	voxelData := (*[1 << 30]C.GPUVoxel)(C.getBufferContents(mc.voxelBuffer))[:mc.totalVoxels:mc.totalVoxels]
 	shellData := (*[1 << 20]C.GPUShell)(C.getBufferContents(mc.shellBuffer))[:mc.shellCount:mc.shellCount]
-	
+
 	// Copy voxel data
 	voxelIndex := 0
 	for shellIdx, shell := range planet.Shells {
@@ -689,26 +690,26 @@ func (mc *MetalCompute) uploadPlanetData(planet *core.VoxelPlanet) error {
 		shellData[shellIdx].latBands = C.int(shell.LatBands)
 		shellData[shellIdx].maxLonCount = C.int(len(shell.Voxels[0])) // Approximate
 		shellData[shellIdx].voxelOffset = C.int(voxelIndex)
-		
+
 		// Copy voxels
 		for _, latVoxels := range shell.Voxels {
 			for _, voxel := range latVoxels {
 				if voxelIndex >= mc.totalVoxels {
 					return fmt.Errorf("voxel index overflow")
 				}
-				
+
 				voxelData[voxelIndex].core.MaterialType = C.uint8_t(voxel.Type)
 				voxelData[voxelIndex].density = C.float(voxel.Density)
 				voxelData[voxelIndex].temperature = C.float(voxel.Temperature)
 				voxelData[voxelIndex].pressure = C.float(voxel.Pressure)
 				voxelData[voxelIndex].velR = C.float(voxel.VelR)
-				voxelData[voxelIndex].velTheta = C.float(voxel.VelTheta)
-				voxelData[voxelIndex].velPhi = C.float(voxel.VelPhi)
+				voxelData[voxelIndex].VelNorth = C.float(voxel.VelNorth)
+				voxelData[voxelIndex].VelEast = C.float(voxel.VelEast)
 				voxelData[voxelIndex].age = C.float(voxel.Age)
 				voxelData[voxelIndex].stress = C.float(voxel.Stress)
 				voxelData[voxelIndex].composition = C.float(voxel.Composition)
 				voxelData[voxelIndex].yieldStrength = C.float(voxel.YieldStrength)
-				
+
 				// Pack flags
 				flags := C.uint8_t(0)
 				if voxel.IsBrittle {
@@ -718,12 +719,12 @@ func (mc *MetalCompute) uploadPlanetData(planet *core.VoxelPlanet) error {
 					flags |= 2
 				}
 				voxelData[voxelIndex].flags = flags
-				
+
 				voxelIndex++
 			}
 		}
 	}
-	
+
 	return nil
 }
 
@@ -731,7 +732,7 @@ func (mc *MetalCompute) uploadPlanetData(planet *core.VoxelPlanet) error {
 func (mc *MetalCompute) downloadPlanetData(planet *core.VoxelPlanet) error {
 	// Get GPU buffer pointers
 	voxelData := (*[1 << 30]C.GPUVoxel)(C.getBufferContents(mc.voxelBuffer))[:mc.totalVoxels:mc.totalVoxels]
-	
+
 	// Copy voxel data back
 	voxelIndex := 0
 	for _, shell := range planet.Shells {
@@ -740,31 +741,31 @@ func (mc *MetalCompute) downloadPlanetData(planet *core.VoxelPlanet) error {
 				if voxelIndex >= mc.totalVoxels {
 					return fmt.Errorf("voxel index overflow")
 				}
-				
+
 				voxel := &shell.Voxels[latIdx][lonIdx]
 				gpuVoxel := &voxelData[voxelIndex]
-				
+
 				voxel.Type = core.MaterialType(gpuVoxel.core.MaterialType)
 				voxel.Density = float32(gpuVoxel.density)
 				voxel.Temperature = float32(gpuVoxel.temperature)
 				voxel.Pressure = float32(gpuVoxel.pressure)
 				voxel.VelR = float32(gpuVoxel.velR)
-				voxel.VelTheta = float32(gpuVoxel.velTheta)
-				voxel.VelPhi = float32(gpuVoxel.velPhi)
+				voxel.VelNorth = float32(gpuVoxel.VelNorth)
+				voxel.VelEast = float32(gpuVoxel.VelEast)
 				voxel.Age = float32(gpuVoxel.age)
 				voxel.Stress = float32(gpuVoxel.stress)
 				voxel.Composition = float32(gpuVoxel.composition)
 				voxel.YieldStrength = float32(gpuVoxel.yieldStrength)
-				
+
 				// Unpack flags
 				voxel.IsBrittle = (gpuVoxel.flags & 1) != 0
 				voxel.IsFractured = (gpuVoxel.flags & 2) != 0
-				
+
 				voxelIndex++
 			}
 		}
 	}
-	
+
 	return nil
 }
 
@@ -776,11 +777,11 @@ func (mc *MetalCompute) computeNeighborIndices() error {
 		mc.shellBuffer,
 		C.int(mc.totalVoxels),
 	)
-	
+
 	if result != 0 {
 		return fmt.Errorf("failed to compute neighbor indices")
 	}
-	
+
 	mc.neighborsReady = true
 	return nil
 }
@@ -790,7 +791,7 @@ func (mc *MetalCompute) UpdateAdvection(dt float64) error {
 	if !mc.initialized {
 		return fmt.Errorf("Metal compute not initialized")
 	}
-	
+
 	// Run advection kernel
 	result := C.runAdvectionKernel(
 		mc.ctx,
@@ -800,13 +801,13 @@ func (mc *MetalCompute) UpdateAdvection(dt float64) error {
 		C.int(mc.totalVoxels),
 		C.float(dt),
 	)
-	
+
 	if result != 0 {
 		return fmt.Errorf("advection kernel failed")
 	}
-	
+
 	// Swap buffers
 	mc.voxelBuffer, mc.tempBuffer = mc.tempBuffer, mc.voxelBuffer
-	
+
 	return nil
 }

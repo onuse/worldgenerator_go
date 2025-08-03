@@ -124,8 +124,8 @@ func (pm *PlateManager) createPlateFromSeed(seed core.VoxelCoord, visited map[co
 	seedVoxel := &shell.Voxels[seed.Lat][seed.Lon]
 
 	// Reference velocity for this plate
-	refVelTheta := seedVoxel.VelTheta
-	refVelPhi := seedVoxel.VelPhi
+	refVelNorth := seedVoxel.VelNorth
+	refVelEast := seedVoxel.VelEast
 
 	// Flood fill queue
 	queue := []core.VoxelCoord{seed}
@@ -138,11 +138,11 @@ func (pm *PlateManager) createPlateFromSeed(seed core.VoxelCoord, visited map[co
 		// Add to plate
 		plate.MemberVoxels = append(plate.MemberVoxels, current)
 		pm.VoxelPlateMap[current] = plate.ID
-		
+
 		// Set PlateID in the actual voxel
-		if current.Shell < len(pm.planet.Shells) && 
-		   current.Lat < len(pm.planet.Shells[current.Shell].Voxels) &&
-		   current.Lon < len(pm.planet.Shells[current.Shell].Voxels[current.Lat]) {
+		if current.Shell < len(pm.planet.Shells) &&
+			current.Lat < len(pm.planet.Shells[current.Shell].Voxels) &&
+			current.Lon < len(pm.planet.Shells[current.Shell].Voxels[current.Lat]) {
 			pm.planet.Shells[current.Shell].Voxels[current.Lat][current.Lon].PlateID = int32(plate.ID)
 		}
 
@@ -154,7 +154,7 @@ func (pm *PlateManager) createPlateFromSeed(seed core.VoxelCoord, visited map[co
 			}
 
 			// Check if neighbor should be part of this plate
-			if pm.shouldBelongToPlate(neighbor, refVelTheta, refVelPhi) {
+			if pm.shouldBelongToPlate(neighbor, refVelNorth, refVelEast) {
 				visited[neighbor] = true
 				queue = append(queue, neighbor)
 			}
@@ -165,7 +165,7 @@ func (pm *PlateManager) createPlateFromSeed(seed core.VoxelCoord, visited map[co
 }
 
 // shouldBelongToPlate checks if a voxel has similar velocity to the plate
-func (pm *PlateManager) shouldBelongToPlate(coord core.VoxelCoord, refVelTheta, refVelPhi float32) bool {
+func (pm *PlateManager) shouldBelongToPlate(coord core.VoxelCoord, refVelNorth, refVelEast float32) bool {
 	if coord.Shell >= len(pm.planet.Shells) {
 		return false
 	}
@@ -184,8 +184,8 @@ func (pm *PlateManager) shouldBelongToPlate(coord core.VoxelCoord, refVelTheta, 
 
 	// Check velocity similarity (within threshold)
 	velThreshold := float32(1e-6) // m/s
-	thetaDiff := float32(math.Abs(float64(voxel.VelTheta - refVelTheta)))
-	phiDiff := float32(math.Abs(float64(voxel.VelPhi - refVelPhi)))
+	thetaDiff := float32(math.Abs(float64(voxel.VelNorth - refVelNorth)))
+	phiDiff := float32(math.Abs(float64(voxel.VelEast - refVelEast)))
 
 	return thetaDiff < velThreshold && phiDiff < velThreshold
 }
@@ -383,20 +383,20 @@ func (pm *PlateManager) updatePlateVelocity(plate *TectonicPlate, dt float64) {
 // GetPlateVelocities returns angular velocities for all plates
 func (pm *PlateManager) GetPlateVelocities() map[int32][3]float32 {
 	velocities := make(map[int32][3]float32)
-	
+
 	for _, plate := range pm.Plates {
 		// Convert Euler pole to radians
 		poleLat := plate.EulerPoleLat * math.Pi / 180.0
 		poleLon := plate.EulerPoleLon * math.Pi / 180.0
-		
+
 		// Euler pole unit vector * angular velocity
 		poleX := float32(math.Cos(poleLat) * math.Cos(poleLon) * plate.AngularVelocity)
 		poleY := float32(math.Cos(poleLat) * math.Sin(poleLon) * plate.AngularVelocity)
 		poleZ := float32(math.Sin(poleLat) * plate.AngularVelocity)
-		
+
 		velocities[int32(plate.ID)] = [3]float32{poleX, poleY, poleZ}
 	}
-	
+
 	return velocities
 }
 
@@ -462,8 +462,8 @@ func (pm *PlateManager) applyPlateMotion(plate *TectonicPlate) {
 
 		// Convert to spherical velocity components
 		// This is approximate - proper conversion is complex
-		voxel.VelTheta = float32(-velX*math.Sin(lon) + velY*math.Cos(lon))
-		voxel.VelPhi = float32(-velX*math.Sin(lat)*math.Cos(lon) - velY*math.Sin(lat)*math.Sin(lon) + velZ*math.Cos(lat))
+		voxel.VelNorth = float32(-velX*math.Sin(lon) + velY*math.Cos(lon))
+		voxel.VelEast = float32(-velX*math.Sin(lat)*math.Cos(lon) - velY*math.Sin(lat)*math.Sin(lon) + velZ*math.Cos(lat))
 
 		// Radial velocity unchanged (set by convection/thermal effects)
 	}
@@ -480,8 +480,8 @@ func (pm *PlateManager) getAverageVelocity(plate *TectonicPlate) core.Vector3 {
 		shell := &pm.planet.Shells[coord.Shell]
 		voxel := &shell.Voxels[coord.Lat][coord.Lon]
 
-		sumVel.X += float64(voxel.VelPhi)
-		sumVel.Y += float64(voxel.VelTheta)
+		sumVel.X += float64(voxel.VelEast)
+		sumVel.Y += float64(voxel.VelNorth)
 		sumVel.Z += float64(voxel.VelR)
 	}
 

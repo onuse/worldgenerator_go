@@ -136,7 +136,7 @@ func (vm *VoxelMechanics) calculateStrainRate(shellIdx, latIdx, lonIdx int) floa
 	// Check east-west gradient
 	if lonIdx < len(shell.Voxels[latIdx])-1 {
 		eastVoxel := &shell.Voxels[latIdx][lonIdx+1]
-		dVphi := float64(eastVoxel.VelPhi - voxel.VelPhi)
+		dVphi := float64(eastVoxel.VelEast - voxel.VelEast)
 		// Approximate distance
 		radius := (shell.OuterRadius + shell.InnerRadius) / 2
 		lat := core.GetLatitudeForBand(latIdx, shell.LatBands) * math.Pi / 180
@@ -273,7 +273,7 @@ func (vm *VoxelMechanics) DetectPlateBoundaries() []PlateBoundary {
 			eastLon := (lonIdx + 1) % len(shell.Voxels[latIdx])
 			eastVoxel := &shell.Voxels[latIdx][eastLon]
 			if eastVoxel.IsBrittle {
-				velDiff := eastVoxel.VelPhi - voxel.VelPhi
+				velDiff := eastVoxel.VelEast - voxel.VelEast
 				if abs(velDiff) > maxVelDiff {
 					maxVelDiff = abs(velDiff)
 					if velDiff > 0 {
@@ -284,7 +284,7 @@ func (vm *VoxelMechanics) DetectPlateBoundaries() []PlateBoundary {
 				}
 
 				// Check for shear (transform)
-				thetaDiff := abs(eastVoxel.VelTheta - voxel.VelTheta)
+				thetaDiff := abs(eastVoxel.VelNorth - voxel.VelNorth)
 				if thetaDiff > maxVelDiff {
 					maxVelDiff = thetaDiff
 					boundaryType = "transform"
@@ -339,9 +339,9 @@ func (vm *VoxelMechanics) ApplyRidgePush(dt float64) {
 				if targetVoxel.IsBrittle {
 					// Push away from ridge
 					if dLon > 0 {
-						targetVoxel.VelPhi += pushForce
+						targetVoxel.VelEast += pushForce
 					} else if dLon < 0 {
-						targetVoxel.VelPhi -= pushForce
+						targetVoxel.VelEast -= pushForce
 					}
 				}
 			}
@@ -427,7 +427,7 @@ func (vm *VoxelMechanics) UpdateCollisions(dt float64) {
 
 			// Continental-continental collision
 			if eastVoxel.Type == core.MatGranite {
-				velDiff := voxel.VelPhi - eastVoxel.VelPhi
+				velDiff := voxel.VelEast - eastVoxel.VelEast
 
 				// Convergent motion between continents
 				if velDiff > 1e-6 {
@@ -438,7 +438,7 @@ func (vm *VoxelMechanics) UpdateCollisions(dt float64) {
 
 			// Continental-oceanic collision (different dynamics)
 			if eastVoxel.Type == core.MatBasalt {
-				velDiff := voxel.VelPhi - eastVoxel.VelPhi
+				velDiff := voxel.VelEast - eastVoxel.VelEast
 
 				if velDiff > 1e-6 {
 					// Oceanic plate subducts, continental margin uplifts
@@ -456,7 +456,7 @@ func (vm *VoxelMechanics) applyCollisionEffects(shell *core.SphericalShell, lat1
 	voxel2 := &shell.Voxels[lat1][lon2]
 
 	// Calculate collision intensity
-	velDiff := abs(voxel1.VelPhi - voxel2.VelPhi)
+	velDiff := abs(voxel1.VelEast - voxel2.VelEast)
 	collisionForce := velDiff * float32(dt) * 1e6
 
 	// 1. Crustal thickening (uplift)
@@ -467,8 +467,8 @@ func (vm *VoxelMechanics) applyCollisionEffects(shell *core.SphericalShell, lat1
 
 	// 2. Lateral deformation
 	// Crust spreads perpendicular to collision
-	voxel1.VelTheta += upliftRate * 0.5
-	voxel2.VelTheta -= upliftRate * 0.5
+	voxel1.VelNorth += upliftRate * 0.5
+	voxel2.VelNorth -= upliftRate * 0.5
 
 	// 3. Stress accumulation
 	voxel1.Stress += collisionForce
@@ -486,8 +486,8 @@ func (vm *VoxelMechanics) applyCollisionEffects(shell *core.SphericalShell, lat1
 	voxel2.Temperature += collisionForce * 0.001
 
 	// 6. Slow down convergence (resistance)
-	voxel1.VelPhi *= 0.95
-	voxel2.VelPhi *= 0.95
+	voxel1.VelEast *= 0.95
+	voxel2.VelEast *= 0.95
 }
 
 // applySubductionEffects handles oceanic-continental collision
@@ -505,7 +505,7 @@ func (vm *VoxelMechanics) applySubductionEffects(shell *core.SphericalShell, lat
 	continentalVoxel.Temperature += 10 * float32(dt)
 
 	// Create back-arc extension
-	continentalVoxel.VelPhi += float32(0.000001 * dt)
+	continentalVoxel.VelEast += float32(0.000001 * dt)
 }
 
 // UpdateContinentalBreakup handles rifting and continental separation
@@ -544,7 +544,7 @@ func (vm *VoxelMechanics) UpdateContinentalBreakup(dt float64) {
 			eastVoxel := &shell.Voxels[latIdx][eastLon]
 
 			if eastVoxel.Type == core.MatGranite {
-				velDiff := eastVoxel.VelPhi - voxel.VelPhi
+				velDiff := eastVoxel.VelEast - voxel.VelEast
 
 				// Divergent motion between continental blocks
 				if velDiff > 1e-6 {
@@ -587,15 +587,15 @@ func (vm *VoxelMechanics) applyRiftingEffects(shell *core.SphericalShell, latIdx
 	// 3. Create divergent velocities
 	if riftType == "plume" {
 		// Radial pattern away from plume
-		voxel.VelTheta += float32(0.00001 * dt * math.Sin(float64(lonIdx)))
-		voxel.VelPhi += float32(0.00001 * dt * math.Cos(float64(lonIdx)))
+		voxel.VelNorth += float32(0.00001 * dt * math.Sin(float64(lonIdx)))
+		voxel.VelEast += float32(0.00001 * dt * math.Cos(float64(lonIdx)))
 	} else {
 		// Linear rifting
 		eastLon := (lonIdx + 1) % len(shell.Voxels[latIdx])
 		eastVoxel := &shell.Voxels[latIdx][eastLon]
 
 		// Push blocks apart
-		voxel.VelPhi -= float32(0.000005 * dt)
-		eastVoxel.VelPhi += float32(0.000005 * dt)
+		voxel.VelEast -= float32(0.000005 * dt)
+		eastVoxel.VelEast += float32(0.000005 * dt)
 	}
 }

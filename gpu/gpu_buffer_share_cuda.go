@@ -1,11 +1,16 @@
+//go:build cuda
 // +build cuda
 
 package gpu
 
-
 import (
+	"fmt"
+	"unsafe"
 	"worldgenerator/core"
+
+	"github.com/go-gl/gl/v4.3-core/gl"
 )
+
 /*
 #cgo LDFLAGS: -lGL
 
@@ -24,38 +29,38 @@ typedef struct {
 PersistentBuffer* createPersistentBuffer(size_t size) {
     PersistentBuffer* pb = (PersistentBuffer*)malloc(sizeof(PersistentBuffer));
     if (!pb) return NULL;
-    
+
     pb->size = size;
-    
+
     // Generate buffer
     glGenBuffers(1, &pb->buffer);
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, pb->buffer);
-    
+
     // Allocate with persistent mapping flags
     GLbitfield flags = GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT | GL_MAP_COHERENT_BIT;
     glBufferStorage(GL_SHADER_STORAGE_BUFFER, size, NULL, flags);
-    
+
     // Map persistently
     pb->mappedPtr = glMapBufferRange(GL_SHADER_STORAGE_BUFFER, 0, size, flags);
-    
+
     if (!pb->mappedPtr) {
         glDeleteBuffers(1, &pb->buffer);
         free(pb);
         return NULL;
     }
-    
+
     return pb;
 }
 
 void releasePersistentBuffer(PersistentBuffer* pb) {
     if (!pb) return;
-    
+
     if (pb->buffer) {
         glBindBuffer(GL_SHADER_STORAGE_BUFFER, pb->buffer);
         glUnmapBuffer(GL_SHADER_STORAGE_BUFFER);
         glDeleteBuffers(1, &pb->buffer);
     }
-    
+
     free(pb);
 }
 
@@ -74,25 +79,19 @@ void ensureGPUVisibility() {
 */
 import "C"
 
-import (
-	"fmt"
-	"github.com/go-gl/gl/v4.3-core/gl"
-	"unsafe"
-)
-
 // PersistentBufferManager manages GPU buffers with CPU/GPU shared memory
 // This is a simpler approach that works on Windows/Linux without CUDA
 type PersistentBufferManager struct {
 	voxelBuffer    *C.PersistentBuffer
 	shellBuffer    *C.PersistentBuffer
 	lonCountBuffer *C.PersistentBuffer
-	
-	voxelData      []GPUVoxelMaterial
-	shellData      []ShellMetadataGPU
-	lonCountData   []int32
-	
-	totalVoxels    int
-	shellCount     int
+
+	voxelData    []GPUVoxelMaterial
+	shellData    []ShellMetadataGPU
+	lonCountData []int32
+
+	totalVoxels int
+	shellCount  int
 }
 
 // NewPersistentBufferManager creates CPU/GPU shared buffers using OpenGL 4.4+ persistent mapping
@@ -101,13 +100,13 @@ func NewPersistentBufferManager(planet *core.VoxelPlanet) (*PersistentBufferMana
 	var major, minor int32
 	gl.GetIntegerv(gl.MAJOR_VERSION, &major)
 	gl.GetIntegerv(gl.MINOR_VERSION, &minor)
-	
+
 	if major < 4 || (major == 4 && minor < 4) {
 		// Fallback message - we'll use regular buffers
 		fmt.Println("Warning: OpenGL 4.4+ required for zero-copy buffers, using regular buffers")
 		return nil, fmt.Errorf("OpenGL 4.4+ required for persistent mapping")
 	}
-	
+
 	// Count total voxels
 	totalVoxels := 0
 	totalLonCounts := 0
@@ -117,19 +116,19 @@ func NewPersistentBufferManager(planet *core.VoxelPlanet) (*PersistentBufferMana
 		}
 		totalLonCounts += len(shell.LonCounts)
 	}
-	
+
 	mgr := &PersistentBufferManager{
 		totalVoxels: totalVoxels,
 		shellCount:  len(planet.Shells),
 	}
-	
+
 	// Create voxel buffer
 	voxelSize := totalVoxels * int(unsafe.Sizeof(GPUVoxelMaterial{}))
 	mgr.voxelBuffer = C.createPersistentBuffer(C.size_t(voxelSize))
 	if mgr.voxelBuffer == nil {
 		return nil, fmt.Errorf("failed to create persistent voxel buffer")
 	}
-	
+
 	// Create shell metadata buffer
 	shellSize := mgr.shellCount * int(unsafe.Sizeof(ShellMetadataGPU{}))
 	mgr.shellBuffer = C.createPersistentBuffer(C.size_t(shellSize))
@@ -137,7 +136,7 @@ func NewPersistentBufferManager(planet *core.VoxelPlanet) (*PersistentBufferMana
 		mgr.Release()
 		return nil, fmt.Errorf("failed to create persistent shell buffer")
 	}
-	
+
 	// Create longitude count buffer
 	lonCountSize := totalLonCounts * 4 // 4 bytes per int32
 	mgr.lonCountBuffer = C.createPersistentBuffer(C.size_t(lonCountSize))
@@ -145,15 +144,15 @@ func NewPersistentBufferManager(planet *core.VoxelPlanet) (*PersistentBufferMana
 		mgr.Release()
 		return nil, fmt.Errorf("failed to create persistent lon count buffer")
 	}
-	
+
 	// Create slices that directly map to GPU memory
 	mgr.voxelData = (*[1 << 30]GPUVoxelMaterial)(C.getBufferPtr(mgr.voxelBuffer))[:totalVoxels:totalVoxels]
 	mgr.shellData = (*[1 << 20]ShellMetadataGPU)(C.getBufferPtr(mgr.shellBuffer))[:mgr.shellCount:mgr.shellCount]
 	mgr.lonCountData = (*[1 << 20]int32)(C.getBufferPtr(mgr.lonCountBuffer))[:totalLonCounts:totalLonCounts]
-	
+
 	// Initialize shell metadata (only needs to be done once)
 	mgr.UpdateShellMetadata(planet)
-	
+
 	return mgr, nil
 }
 
@@ -171,7 +170,7 @@ func (mgr *PersistentBufferManager) UpdateFromPlanet(planet *core.VoxelPlanet) {
 			}
 		}
 	}
-	
+
 	// Ensure GPU sees the writes
 	C.ensureGPUVisibility()
 }
@@ -186,16 +185,16 @@ func (mgr *PersistentBufferManager) UpdateToPlanet(planet *core.VoxelPlanet) {
 					// Convert back from GPU format
 					gpu := &mgr.voxelData[idx]
 					voxel := &shell.Voxels[latIdx][lonIdx]
-					
+
 					voxel.Type = core.MaterialType(gpu.Type)
 					voxel.Density = gpu.Density
 					voxel.Temperature = gpu.Temperature
 					voxel.Pressure = gpu.Pressure
-					voxel.VelTheta = gpu.VelTheta
-					voxel.VelPhi = gpu.VelPhi
+					voxel.VelNorth = gpu.VelNorth
+					voxel.VelEast = gpu.VelEast
 					voxel.VelR = gpu.VelR
 					voxel.Age = gpu.Age
-					
+
 					idx++
 				}
 			}
@@ -207,7 +206,7 @@ func (mgr *PersistentBufferManager) UpdateToPlanet(planet *core.VoxelPlanet) {
 func (mgr *PersistentBufferManager) UpdateShellMetadata(planet *core.VoxelPlanet) {
 	voxelOffset := 0
 	lonCountOffset := 0
-	
+
 	for i, shell := range planet.Shells {
 		mgr.shellData[i] = ShellMetadataGPU{
 			InnerRadius:    float32(shell.InnerRadius),
@@ -216,7 +215,7 @@ func (mgr *PersistentBufferManager) UpdateShellMetadata(planet *core.VoxelPlanet
 			VoxelOffset:    int32(voxelOffset),
 			LonCountOffset: int32(lonCountOffset),
 		}
-		
+
 		// Copy longitude counts
 		for j, count := range shell.LonCounts {
 			mgr.lonCountData[lonCountOffset+j] = int32(count)
@@ -224,21 +223,21 @@ func (mgr *PersistentBufferManager) UpdateShellMetadata(planet *core.VoxelPlanet
 		}
 		lonCountOffset += len(shell.LonCounts)
 	}
-	
+
 	C.ensureGPUVisibility()
 }
 
 // GetBufferIDs returns OpenGL buffer IDs for binding
 func (mgr *PersistentBufferManager) GetBufferIDs() (voxel, shell, lonCount uint32) {
 	return uint32(C.getBufferID(mgr.voxelBuffer)),
-		   uint32(C.getBufferID(mgr.shellBuffer)),
-		   uint32(C.getBufferID(mgr.lonCountBuffer))
+		uint32(C.getBufferID(mgr.shellBuffer)),
+		uint32(C.getBufferID(mgr.lonCountBuffer))
 }
 
 // BindBuffers binds the buffers to SSBO binding points
 func (mgr *PersistentBufferManager) BindBuffers() {
 	voxelID, shellID, lonCountID := mgr.GetBufferIDs()
-	
+
 	gl.BindBufferBase(gl.SHADER_STORAGE_BUFFER, 0, voxelID)
 	gl.BindBufferBase(gl.SHADER_STORAGE_BUFFER, 1, shellID)
 	gl.BindBufferBase(gl.SHADER_STORAGE_BUFFER, 2, lonCountID)
@@ -260,12 +259,12 @@ func (mgr *PersistentBufferManager) Release() {
 		C.releasePersistentBuffer(mgr.voxelBuffer)
 		mgr.voxelBuffer = nil
 	}
-	
+
 	if mgr.shellBuffer != nil {
 		C.releasePersistentBuffer(mgr.shellBuffer)
 		mgr.shellBuffer = nil
 	}
-	
+
 	if mgr.lonCountBuffer != nil {
 		C.releasePersistentBuffer(mgr.lonCountBuffer)
 		mgr.lonCountBuffer = nil
