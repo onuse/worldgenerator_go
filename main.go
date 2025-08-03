@@ -57,7 +57,7 @@ func main() {
 		ContinentRoughness: 0.7,  // Moderately irregular shapes
 	}
 	planet := core.CreateRandomizedPlanet(*radius, *shellCount, genParams)
-	
+
 	// Initialize virtual voxel system if requested
 	if *virtualVoxels {
 		fmt.Println("Initializing virtual voxel system...")
@@ -177,7 +177,7 @@ func main() {
 
 	// Initialize voxel textures
 	renderer.UpdateVoxelTextures(planet)
-	
+
 	// Virtual voxel system removed - using standard grid
 
 	// Simulation parameters
@@ -257,35 +257,56 @@ func main() {
 		// Update GPU data only when physics updated
 		if physicsUpdated {
 			// Updates tracked internally
-			
 
 			if gpuBufferMgr != nil {
 				// Using optimized GPU buffer manager
 				// Only include plate data when in plate visualization mode
-				// TODO: Fix this when physics package is properly integrated
-				// if renderer.RenderMode == 4 {
-				// 	if vp, ok := planet.Physics.(*physics.VoxelPhysics); ok && vp.plates != nil {
-				// 		gpuBufferMgr.UpdateFromPlanetWithPlates(planet, vp.plates)
-				// 	} else {
-				// 		gpuBufferMgr.UpdateFromPlanet(planet)
-				// 	}
-				// } else {
-				gpuBufferMgr.UpdateFromPlanet(planet)
+				if renderer.RenderMode == 4 {
+					// Get plate manager through the safe interface
+					plateManager := core.GetPlateManager(planet)
+					if plateManager != nil {
+						// Need to get the concrete type for the GPU buffer manager
+						if physicsSystem := core.GetPhysics(planet); physicsSystem != nil {
+							// Get the raw physics interface from planet
+							if vp, ok := planet.Physics.(*physics.VoxelPhysics); ok {
+								gpuBufferMgr.UpdateFromPlanetWithPlates(planet, vp.GetPlateManagerDirect())
+							} else {
+								gpuBufferMgr.UpdateFromPlanet(planet)
+							}
+						} else {
+							gpuBufferMgr.UpdateFromPlanet(planet)
+						}
+					} else {
+						gpuBufferMgr.UpdateFromPlanet(planet)
+					}
+				} else {
+					gpuBufferMgr.UpdateFromPlanet(planet)
+				}
 				// Ensure buffers are synced to GPU
 				gpuBufferMgr.BindBuffers()
-				// }
 			} else {
 				// Fallback path - copy through shared buffers
-				// TODO: Fix this when physics package is properly integrated
-				// if renderer.RenderMode == 4 {
-				// 	if vp, ok := planet.Physics.(*physics.VoxelPhysics); ok && vp.plates != nil {
-				// 		simulation.UpdateSharedBuffersWithPlates(sharedBuffers, planet, vp.plates)
-				// 	} else {
-				// 		sharedBuffers.UpdateFromPlanet(planet)
-				// 	}
-				// } else {
-				sharedBuffers.UpdateFromPlanet(planet)
-				// }
+				if renderer.RenderMode == 4 {
+					// Get plate manager through the safe interface
+					plateManager := core.GetPlateManager(planet)
+					if plateManager != nil {
+						// Need to get the concrete type for the shared buffer update
+						if physicsSystem := core.GetPhysics(planet); physicsSystem != nil {
+							// Get the raw physics interface from planet
+							if vp, ok := planet.Physics.(*physics.VoxelPhysics); ok {
+								gpu.UpdateSharedBuffersWithPlates(sharedBuffers, planet, vp.GetPlateManagerDirect())
+							} else {
+								sharedBuffers.UpdateFromPlanet(planet)
+							}
+						} else {
+							sharedBuffers.UpdateFromPlanet(planet)
+						}
+					} else {
+						sharedBuffers.UpdateFromPlanet(planet)
+					}
+				} else {
+					sharedBuffers.UpdateFromPlanet(planet)
+				}
 				renderer.UpdateBuffers(sharedBuffers)
 			}
 

@@ -68,8 +68,16 @@ func NewVoxelPhysics(planet *core.VoxelPlanet) *VoxelPhysics {
 	return vp
 }
 
-// GetPlateManager returns the plate manager for external access
-func (vp *VoxelPhysics) GetPlateManager() *simulation.PlateManager {
+// GetPlateManager implements core.PhysicsInterface
+func (vp *VoxelPhysics) GetPlateManager() core.PlateManagerInterface {
+	if vp.plates == nil {
+		return nil
+	}
+	return vp.plates
+}
+
+// GetPlateManagerDirect returns the concrete plate manager for physics-internal use
+func (vp *VoxelPhysics) GetPlateManagerDirect() *simulation.PlateManager {
 	return vp.plates
 }
 

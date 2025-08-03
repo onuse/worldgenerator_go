@@ -1,6 +1,7 @@
 package core
 
 import (
+	"fmt"
 	"math"
 	"math/rand"
 )
@@ -41,6 +42,8 @@ func generateRandomContinents(planet *VoxelPlanet, rng *rand.Rand, params Planet
 	// Work with the surface shell (second from top)
 	surfaceShell := len(planet.Shells) - 2
 	shell := &planet.Shells[surfaceShell]
+	
+	fmt.Printf("Generating %d random continents on surface shell %d\n", params.ContinentCount, surfaceShell)
 
 	// Calculate total surface area
 	totalVoxels := 0
@@ -104,6 +107,8 @@ func generateRandomContinents(planet *VoxelPlanet, rng *rand.Rand, params Planet
 	}
 
 	// Fill in the voxels based on continent seeds
+	landCount := 0
+	waterCount := 0
 	for latIdx, latBand := range shell.Voxels {
 		lat := GetLatitudeForBand(latIdx, shell.LatBands)
 
@@ -122,10 +127,15 @@ func generateRandomContinents(planet *VoxelPlanet, rng *rand.Rand, params Planet
 				// Add noise for irregular shapes
 				noiseFactor := 1.0
 				if seed.shape > 0 {
-					// Use position-based noise for consistent continent shapes
-					noise1 := math.Sin(lat*0.1+lon*0.1) * math.Cos(lat*0.2-lon*0.15)
-					noise2 := math.Sin(lat*0.3-lon*0.2) * math.Cos(lat*0.15+lon*0.25)
-					noiseFactor = 1.0 + seed.shape*(noise1*0.3+noise2*0.2)
+					// Use multi-scale noise for more natural continent shapes
+					// Large scale features
+					noise1 := math.Sin(lat*0.05+lon*0.04) * math.Cos(lat*0.06-lon*0.03)
+					// Medium scale features  
+					noise2 := math.Sin(lat*0.15-lon*0.12) * math.Cos(lat*0.18+lon*0.14)
+					// Small scale features for coastline detail
+					noise3 := math.Sin(lat*0.3+lon*0.25) * math.Cos(lat*0.35-lon*0.28)
+					// Combine with decreasing amplitude
+					noiseFactor = 1.0 + seed.shape*(noise1*0.4+noise2*0.25+noise3*0.15)
 				}
 
 				effectiveRadius := seed.radius * noiseFactor
@@ -143,6 +153,7 @@ func generateRandomContinents(planet *VoxelPlanet, rng *rand.Rand, params Planet
 				voxel.Type = MatGranite
 				voxel.Density = MaterialProperties[MatGranite].DefaultDensity
 				voxel.IsBrittle = true
+				landCount++
 
 				// Age based on distance from continent center (older at center)
 				ageFactor := 1.0 - minDistance/30.0
@@ -174,6 +185,7 @@ func generateRandomContinents(planet *VoxelPlanet, rng *rand.Rand, params Planet
 			} else {
 				voxel.Type = MatWater
 				voxel.Density = MaterialProperties[MatWater].DefaultDensity
+				waterCount++
 				// Ocean depth gradient based on distance from land
 				oceanDepth := float32(-1000 - rng.Float64()*3000) // -1 to -4km
 				voxel.Elevation = oceanDepth
@@ -210,6 +222,83 @@ func generateRandomContinents(planet *VoxelPlanet, rng *rand.Rand, params Planet
 				}
 
 				voxel.Temperature = 1000 - float32(700*(crustShell.OuterRadius-planet.Radius*0.85)/(planet.Radius*0.14))
+			}
+		}
+	}
+	
+	fmt.Printf("Generated continents: %d land voxels, %d water voxels (%.1f%% land)\n", 
+		landCount, waterCount, float64(landCount)*100/float64(landCount+waterCount))
+		
+	// Apply smoothing pass to reduce grid artifacts at coastlines
+	smoothCoastlines(shell)
+}
+
+// smoothCoastlines applies smoothing to reduce hard edges at land-water boundaries
+func smoothCoastlines(shell *SphericalShell) {
+	// Create a copy of the voxel types to work with
+	originalTypes := make([][]MaterialType, len(shell.Voxels))
+	for lat := range shell.Voxels {
+		originalTypes[lat] = make([]MaterialType, len(shell.Voxels[lat]))
+		for lon := range shell.Voxels[lat] {
+			originalTypes[lat][lon] = shell.Voxels[lat][lon].Type
+		}
+	}
+	
+	// Apply smoothing based on neighbor count
+	for latIdx := range shell.Voxels {
+		for lonIdx := range shell.Voxels[latIdx] {
+			voxel := &shell.Voxels[latIdx][lonIdx]
+			
+			// Only process coastline voxels
+			if voxel.Type != MatGranite && voxel.Type != MatWater {
+				continue
+			}
+			
+			// Count land neighbors
+			landNeighbors := 0
+			totalNeighbors := 0
+			
+			// Check 8 neighbors
+			for dlat := -1; dlat <= 1; dlat++ {
+				for dlon := -1; dlon <= 1; dlon++ {
+					if dlat == 0 && dlon == 0 {
+						continue
+					}
+					
+					nlat := latIdx + dlat
+					nlon := lonIdx + dlon
+					
+					// Handle latitude bounds
+					if nlat < 0 || nlat >= len(shell.Voxels) {
+						continue
+					}
+					
+					// Handle longitude wrapping
+					lonCount := len(shell.Voxels[nlat])
+					nlon = ((nlon % lonCount) + lonCount) % lonCount
+					
+					totalNeighbors++
+					if originalTypes[nlat][nlon] == MatGranite {
+						landNeighbors++
+					}
+				}
+			}
+			
+			// Apply smoothing rules
+			if totalNeighbors > 0 {
+				landRatio := float64(landNeighbors) / float64(totalNeighbors)
+				
+				// If we're water surrounded by mostly land, consider becoming shallow water/coast
+				if voxel.Type == MatWater && landRatio > 0.65 {
+					// Create shallower water near coast
+					voxel.Elevation = -200 + float32(landRatio*150) // -200 to -50m
+				}
+				
+				// If we're land surrounded by mostly water, lower elevation
+				if voxel.Type == MatGranite && landRatio < 0.35 {
+					// Create low-lying coastal areas
+					voxel.Elevation = float32(landRatio * 200) // 0-70m low coast
+				}
 			}
 		}
 	}

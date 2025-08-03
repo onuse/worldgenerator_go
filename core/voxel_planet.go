@@ -3,7 +3,6 @@ package core
 import (
 	"fmt"
 	"math"
-	"math/rand"
 )
 
 // CreateVoxelPlanet initializes a new voxel-based planet
@@ -224,61 +223,18 @@ func initializePlanetComposition(planet *VoxelPlanet) {
 					// Add some variation in latitude velocity too
 					voxel.VelNorth = 1e-9 * float32(math.Sin(lon*0.05)) // Small N-S drift
 				} else if shellIdx == len(planet.Shells)-2 {
-					// Surface shell - recalculate continentalness here
+					// Surface shell - Initialize as all ocean
+					// This will be overwritten by generateRandomContinents if using CreateRandomizedPlanet
 					lat := getLatitudeForBand(latIdx, shell.LatBands)
-					lon := float64(lonIdx)/float64(shell.LonCounts[latIdx])*360.0 - 180.0
-
-					// Simple continent generation - just basic shapes, no noise
-					isLand := false
-
-					// Simple rectangular continents for testing
-					// Eurasia
-					if lat > 20 && lat < 75 && lon > -10 && lon < 140 {
-						isLand = true
-					}
-					// Africa
-					if lat > -35 && lat < 35 && lon > -20 && lon < 50 {
-						isLand = true
-					}
-					// Americas
-					if lon > -170 && lon < -30 {
-						if lat > -55 && lat < 70 {
-							isLand = true
-						}
-					}
-					// Australia
-					if lat > -40 && lat < -10 && lon > 110 && lon < 155 {
-						isLand = true
-					}
-
-					if isLand {
-						voxel.Type = MatGranite
-						voxel.Density = MaterialProperties[MatGranite].DefaultDensity
-						voxel.IsBrittle = true
-						voxel.VelEast = 3e-9 * float32(1+0.5*math.Sin(lat*0.1))
-						voxel.VelNorth = 1e-9 * float32(math.Sin(lon*0.05))
-
-						// Add initial elevation variation based on simple patterns
-						// Use lat/lon to create mountain ranges
-						mountainNoise := math.Sin(lat*0.1) * math.Cos(lon*0.05)
-						baseElevation := float32(500) // Base continental elevation
-
-						// Add mountain ranges
-						if mountainNoise > 0.7 {
-							voxel.Elevation = baseElevation + float32(1000+rand.Float64()*2000) // 1.5-3.5km mountains
-						} else if mountainNoise > 0.3 {
-							voxel.Elevation = baseElevation + float32(200+rand.Float64()*800) // 0.7-1.3km highlands
-						} else {
-							voxel.Elevation = baseElevation + float32(rand.Float64()*200-100) // 0.4-0.6km lowlands
-						}
-					} else {
-						voxel.Type = MatWater
-						voxel.Density = MaterialProperties[MatWater].DefaultDensity
-						// Ocean depth based on distance from continents
-						oceanDepth := float32(-1000 - rand.Float64()*3000) // -1 to -4km
-						voxel.Elevation = oceanDepth
-					}
+					
+					// Default to ocean
+					voxel.Type = MatWater
+					voxel.Density = MaterialProperties[MatWater].DefaultDensity
+					voxel.Elevation = float32(-2000) // Default ocean depth
 					voxel.Temperature = 288.15 - float32(math.Abs(lat)*0.5)
+					voxel.IsBrittle = false
+					voxel.VelNorth = 0
+					voxel.VelEast = 0
 				} else {
 					// Atmosphere
 					lat := getLatitudeForBand(latIdx, shell.LatBands)

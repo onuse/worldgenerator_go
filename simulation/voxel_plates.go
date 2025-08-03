@@ -46,6 +46,9 @@ type PlateManager struct {
 	BoundaryMap   map[core.VoxelCoord]bool // Quick lookup for boundary voxels
 	planet        *core.VoxelPlanet
 	nextPlateID   int
+	
+	// Advanced plate dynamics
+	forceCalculator *PlateForceCalculator
 }
 
 // NewPlateManager creates a plate manager
@@ -56,6 +59,42 @@ func NewPlateManager(planet *core.VoxelPlanet) *PlateManager {
 		BoundaryMap:   make(map[core.VoxelCoord]bool),
 		nextPlateID:   1,
 	}
+}
+
+// Implement core.PlateManagerInterface
+
+// GetVoxelPlateID returns the plate ID for a given voxel coordinate
+func (pm *PlateManager) GetVoxelPlateID(coord core.VoxelCoord) (int, bool) {
+	plateID, exists := pm.VoxelPlateMap[coord]
+	return plateID, exists
+}
+
+// IsBoundaryVoxel checks if a voxel is on a plate boundary
+func (pm *PlateManager) IsBoundaryVoxel(coord core.VoxelCoord) bool {
+	return pm.BoundaryMap[coord]
+}
+
+// GetPlateCount returns the number of identified plates
+func (pm *PlateManager) GetPlateCount() int {
+	return len(pm.Plates)
+}
+
+// UpdatePlates recalculates plate boundaries and properties
+func (pm *PlateManager) UpdatePlates() {
+	pm.IdentifyPlates()
+}
+
+// GetPlateBoundaries returns information about plate boundaries for visualization
+func (pm *PlateManager) GetPlateBoundaries() []*PlateBoundary {
+	if pm.forceCalculator == nil {
+		return nil
+	}
+	
+	var boundaries []*PlateBoundary
+	for _, boundary := range pm.forceCalculator.boundaries {
+		boundaries = append(boundaries, boundary)
+	}
+	return boundaries
 }
 
 // IdentifyPlates segments the lithosphere into discrete plates
@@ -303,11 +342,14 @@ func (pm *PlateManager) identifyPlateBoundaries(plate *TectonicPlate) {
 
 // UpdatePlateMotion calculates and applies plate-wide motion
 func (pm *PlateManager) UpdatePlateMotion(dt float64) {
-	// First, calculate forces on each plate
-	for _, plate := range pm.Plates {
-		pm.calculatePlateForces(plate)
+	// Initialize force calculator if needed
+	if pm.forceCalculator == nil {
+		pm.forceCalculator = NewPlateForceCalculator(pm.planet, pm)
 	}
-
+	
+	// Use advanced force calculation
+	pm.forceCalculator.CalculatePlateForces(dt)
+	
 	// Then update plate motion based on forces
 	for _, plate := range pm.Plates {
 		pm.updatePlateVelocity(plate, dt)
@@ -319,34 +361,8 @@ func (pm *PlateManager) UpdatePlateMotion(dt float64) {
 	}
 }
 
-// calculatePlateForces computes driving and resisting forces
-func (pm *PlateManager) calculatePlateForces(plate *TectonicPlate) {
-	// Reset forces
-	plate.RidgePushForce = core.Vector3{}
-	plate.SlabPullForce = core.Vector3{}
-	plate.BasalDragForce = core.Vector3{}
-	plate.CollisionForce = core.Vector3{}
-
-	// Calculate forces from boundaries
-	for _, coord := range plate.BoundaryVoxels {
-		shell := &pm.planet.Shells[coord.Shell]
-		voxel := &shell.Voxels[coord.Lat][coord.Lon]
-
-		// TODO: Fix this when physics integration is complete
-		// boundaries := pm.planet.Physics.(*physics.VoxelPhysics).mechanics.DetectPlateBoundaries()
-		// For now, apply simplified boundary forces based on material type
-		if voxel.Type == core.MatBasalt && plate.Type == "oceanic" {
-			// Simple slab pull for oceanic plates
-			plate.SlabPullForce.Y -= 1e12
-		}
-	}
-
-	// Basal drag proportional to velocity and area
-	avgVel := pm.getAverageVelocity(plate)
-	dragCoeff := 1e10 // Pa·s/m
-	plate.BasalDragForce.X = -avgVel.X * dragCoeff * plate.TotalArea
-	plate.BasalDragForce.Y = -avgVel.Y * dragCoeff * plate.TotalArea
-}
+// calculatePlateForces is now handled by PlateForceCalculator
+// Kept for backward compatibility - delegates to force calculator
 
 // updatePlateVelocity updates the plate's Euler pole rotation
 func (pm *PlateManager) updatePlateVelocity(plate *TectonicPlate, dt float64) {
